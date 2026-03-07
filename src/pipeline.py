@@ -153,13 +153,26 @@ def process_photo(photo_path: str | Path, force_rescan: bool = False) -> dict:
     }
 
 
+def _bbox_float(v):
+    """Convert bbox value to Python float, handling bytes from older DB rows."""
+    if isinstance(v, bytes):
+        import struct
+        return struct.unpack("<f", v)[0]
+    return float(v)
+
+
 def _faces_to_output(faces: list[dict]) -> list[dict]:
     """Convert DB face rows to output format (strip embedding blob)."""
     return [
         {
             "face_id": f["face_id"],
-            "bbox": (f["bbox_x"], f["bbox_y"], f["bbox_w"], f["bbox_h"]),
-            "det_score": f["det_score"],
+            "bbox": (
+                _bbox_float(f["bbox_x"]),
+                _bbox_float(f["bbox_y"]),
+                _bbox_float(f["bbox_w"]),
+                _bbox_float(f["bbox_h"]),
+            ),
+            "det_score": float(f["det_score"]) if not isinstance(f["det_score"], (int, float)) else f["det_score"],
             "age_est": f["age_est"],
             "gender_est": f["gender_est"],
             "person_id": f.get("person_id"),

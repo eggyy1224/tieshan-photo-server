@@ -18,8 +18,9 @@ from .tools.photo_anchor import photo_anchor
 
 mcp = FastMCP(
     "tieshan-photo",
-    version="0.1.0",
-    description="Face detection and recognition for Tieshanzhi historical photo research",
+    instructions="Face detection and recognition for Tieshanzhi historical photo research",
+    host="127.0.0.1",
+    port=PHOTO_SERVER_PORT,
 )
 
 
@@ -112,7 +113,7 @@ def main() -> None:
     log.info("server starting", port=PHOTO_SERVER_PORT, persons_loaded=count)
 
     # Run with streamable HTTP
-    mcp.run(transport="streamable-http", host="127.0.0.1", port=PHOTO_SERVER_PORT)
+    mcp.run(transport="streamable-http")
 
 
 if __name__ == "__main__":

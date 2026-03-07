@@ -173,10 +173,12 @@ def insert_face(
 ) -> int:
     """Insert face record. Returns face_id."""
     conn = get_conn()
+    # Convert bbox to Python floats (numpy float64 → BLOB in SQLite otherwise)
+    bx, by, bw, bh = (float(v) for v in bbox)
     cur = conn.execute(
         """INSERT INTO faces (photo_id, bbox_x, bbox_y, bbox_w, bbox_h, det_score, embedding, age_est, gender_est)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (photo_id, *bbox, det_score, embedding_to_blob(embedding), age_est, gender_est),
+        (photo_id, bx, by, bw, bh, float(det_score), embedding_to_blob(embedding), age_est, gender_est),
     )
     conn.commit()
     return cur.lastrowid  # type: ignore[return-value]

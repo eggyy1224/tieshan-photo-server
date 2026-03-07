@@ -1,4 +1,4 @@
-"""Load persons from family_tree.yaml into the database."""
+"""Load persons from family_tree.yaml and related_persons.yaml into the database."""
 
 from __future__ import annotations
 
@@ -10,15 +10,13 @@ import yaml
 from . import db, log
 from .config import FAMILY_TREE_PATH
 
+RELATED_PERSONS_PATH = FAMILY_TREE_PATH.parent / "related_persons.yaml"
 
-def load_family_tree(path: Path | None = None) -> int:
-    """Parse family_tree.yaml and upsert all persons into the database.
 
-    Returns number of persons loaded.
-    """
-    path = path or FAMILY_TREE_PATH
+def _load_yaml_persons(path: Path) -> int:
+    """Parse a persons YAML file and upsert into the database. Returns count."""
     if not path.exists():
-        log.warn("family_tree.yaml not found", path=str(path))
+        log.warn("persons file not found", path=str(path))
         return 0
 
     with open(path, "r", encoding="utf-8") as f:
@@ -46,5 +44,19 @@ def load_family_tree(path: Path | None = None) -> int:
         )
         count += 1
 
-    log.info("family tree loaded", persons=count, path=str(path))
     return count
+
+
+def load_family_tree(path: Path | None = None) -> int:
+    """Load family_tree.yaml + related_persons.yaml into the database.
+
+    Returns total number of persons loaded.
+    """
+    family_count = _load_yaml_persons(path or FAMILY_TREE_PATH)
+    log.info("family tree loaded", persons=family_count, path=str(path or FAMILY_TREE_PATH))
+
+    related_count = _load_yaml_persons(RELATED_PERSONS_PATH)
+    if related_count:
+        log.info("related persons loaded", persons=related_count, path=str(RELATED_PERSONS_PATH))
+
+    return family_count + related_count

@@ -14,6 +14,10 @@ from .config import VAULT_ROOT
 # Match wikilinks like [[人物/許天象]] or [[人物/許天催.md|許天催]]
 _WIKILINK_RE = re.compile(r"\[\[人物/([^\]|]+?)(?:\.md)?(?:\|[^\]]+)?\]\]")
 
+# Year extraction patterns for known_year (from photo card text)
+_YEAR_EXACT = re.compile(r"\*\*(\d{4})年?\*\*")
+_YEAR_RANGE = re.compile(r"(\d{4})[–\-](\d{4})")
+
 
 def parse_photo_card(card_path: Path) -> Optional[dict]:
     """Parse a photo card Markdown file.
@@ -133,3 +137,79 @@ def create_anchors_from_cards(vault_root: Path | None = None) -> int:
     db.get_conn().commit()
     log.info("anchors from photo cards", created=anchor_count)
     return anchor_count
+
+
+def extract_known_year(text: str) -> Optional[int]:
+    """Extract a known year from photo card text.
+
+    Priority: **YYYY年** bold marker > YYYY–YYYY range (take midpoint).
+    Returns None if no year found.
+    """
+    m = _YEAR_EXACT.search(text)
+    if m:
+        return int(m.group(1))
+
+    m = _YEAR_RANGE.search(text)
+    if m:
+        lo, hi = int(m.group(1)), int(m.group(2))
+        return (lo + hi) // 2
+
+    return None
+
+
+def load_known_years(vault_root: Path | None = None) -> int:
+    """Scan photo cards for known years and write to photos.known_year.
+
+    Returns number of photos updated.
+    """
+    vault_root = vault_root or VAULT_ROOT
+    photo_dir = vault_root / "照片"
+
+    if not photo_dir.exists():
+        return 0
+
+    conn = db.get_conn()
+    updated = 0
+
+    for md_file in sorted(photo_dir.rglob("照片卡_*.md")):
+        try:
+            text = md_file.read_text(encoding="utf-8")
+        except OSError:
+            continue
+
+        if not text.startswith("---"):
+            continue
+
+        end = text.find("---", 3)
+        if end < 0:
+            continue
+
+        try:
+            fm = yaml.safe_load(text[3:end])
+        except yaml.YAMLError:
+            continue
+
+        if not isinstance(fm, dict) or fm.get("type") != "照片卡":
+            continue
+
+        source_path = fm.get("source_path", "")
+        if not source_path:
+            continue
+
+        year = extract_known_year(text)
+        if year is None:
+            continue
+
+        photo = db.get_photo_by_path(source_path)
+        if not photo:
+            continue
+
+        conn.execute(
+            "UPDATE photos SET known_year = ? WHERE photo_id = ?",
+            (year, photo["photo_id"]),
+        )
+        updated += 1
+
+    conn.commit()
+    log.info("known years loaded from photo cards", updated=updated)
+    return updated

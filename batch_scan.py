@@ -19,6 +19,8 @@ from src.config import PROJECT_ROOT, PHOTO_SOURCE_DIRS, IMAGE_EXTENSIONS
 from src.pipeline import process_photo
 from src.matching import match_face, confidence_level
 from src.persons import load_family_tree
+from src.photo_cards import load_known_years
+from src.date_estimate import batch_estimate, calibration_report
 
 
 def discover_photos() -> list[Path]:
@@ -140,6 +142,7 @@ def main():
     parser = argparse.ArgumentParser(description="Batch scan photos for face detection")
     parser.add_argument("--dry-run", action="store_true", help="Count files only, don't scan")
     parser.add_argument("--match-only", action="store_true", help="Skip scanning, only run match pass")
+    parser.add_argument("--date-estimate", action="store_true", help="Run date estimation after matching")
     args = parser.parse_args()
 
     # Init DB + persons
@@ -166,6 +169,36 @@ def main():
 
     # Match pass
     match_stats = match_pass()
+
+    # Date estimation pass
+    if args.date_estimate:
+        print("Loading known years from photo cards...", flush=True)
+        ky_count = load_known_years()
+        print(f"Known years loaded: {ky_count}\n")
+
+        print("Running date estimation...", flush=True)
+        est_stats = batch_estimate()
+        print(
+            f"\n=== Date estimation complete ===\n"
+            f"Estimated: {est_stats['estimated']} | "
+            f"Skipped: {est_stats['skipped']} | "
+            f"Total eligible: {est_stats['total']}\n",
+            flush=True,
+        )
+
+        cal = calibration_report()
+        if cal.get("count", 0) > 0:
+            print(
+                f"=== Calibration ===\n"
+                f"Photos with ground truth: {cal['count']}\n"
+                f"Mean error: {cal['mean_error']} years\n"
+                f"Median error: {cal['median_error']} years\n"
+                f"MAE: {cal['mae']} years\n"
+                f"Suggested bias correction: {cal['suggested_bias_correction']}\n",
+                flush=True,
+            )
+        else:
+            print("No photos with both estimate and known_year for calibration.\n", flush=True)
 
     # Final summary
     stats = db.get_stats()

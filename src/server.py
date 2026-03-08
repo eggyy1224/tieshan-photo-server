@@ -15,6 +15,7 @@ from .tools.photo_find import photo_find
 from .tools.photo_stats import photo_stats
 from .tools.photo_cluster import photo_cluster
 from .tools.photo_anchor import photo_anchor
+from .tools.photo_date import photo_date
 
 mcp = FastMCP(
     "tieshan-photo",
@@ -71,17 +72,18 @@ async def photo_stats_tool(detail: str = "summary") -> dict:
 # ── Phase 2 Tools ────────────────────────────────────────────────────
 
 @mcp.tool()
-async def photo_cluster_tool(eps: float = 0.55, min_samples: int = 2) -> dict:
+async def photo_cluster_tool(eps: float = 0.55, min_samples: int = 2, det_score_min: float = 0.0) -> dict:
     """Auto-cluster unassigned faces using DBSCAN.
 
     Args:
         eps: Maximum cosine distance for clustering (default 0.55).
         min_samples: Minimum faces per cluster (default 2).
+        det_score_min: Minimum detection score to include (default 0.0 = all faces).
 
     Returns:
         Cluster list with face counts and sample photos.
     """
-    return await photo_cluster(eps=eps, min_samples=min_samples)
+    return await photo_cluster(eps=eps, min_samples=min_samples, det_score_min=det_score_min)
 
 
 @mcp.tool()
@@ -99,6 +101,23 @@ async def photo_anchor_tool(face_id: int, person_id: str, note: str = "") -> dic
         Anchor ID and count of new automatic matches triggered.
     """
     return await photo_anchor(face_id=face_id, person_id=person_id, note=note)
+
+
+# ── Phase 3 Tools ────────────────────────────────────────────────────
+
+@mcp.tool()
+async def photo_date_tool(mode: str = "stats", photo_id: str = "") -> dict:
+    """照片年代推估工具。利用已辨識人臉的外觀年齡與已知出生年反推拍攝年份。
+
+    Args:
+        mode:
+          - "stats": 統計概覽（多少照片有推估、年代分布）
+          - "estimate": 單張推估（需 photo_id）
+          - "batch": 批次推估所有符合條件的照片
+          - "calibrate": 校準報告（比對推估 vs 已知年份）
+        photo_id: estimate 模式需要的照片 ID。
+    """
+    return await photo_date(mode=mode, photo_id=photo_id)
 
 
 # ── Startup ──────────────────────────────────────────────────────────

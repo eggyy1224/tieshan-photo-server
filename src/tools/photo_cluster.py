@@ -8,12 +8,13 @@ from .. import db, log
 from ..config import MATCH_MEDIUM
 
 
-async def photo_cluster(eps: float = 0.55, min_samples: int = 2) -> dict:
+async def photo_cluster(eps: float = 0.55, min_samples: int = 2, det_score_min: float = 0.0) -> dict:
     """Cluster unassigned faces using DBSCAN on cosine distance.
 
     Args:
         eps: Maximum distance for DBSCAN (1 - cosine_similarity).
         min_samples: Minimum faces per cluster.
+        det_score_min: Minimum detection score to include (0.0 = all).
 
     Returns:
         Dict with cluster info and sample faces.
@@ -22,17 +23,24 @@ async def photo_cluster(eps: float = 0.55, min_samples: int = 2) -> dict:
 
     all_faces = db.get_all_face_embeddings()
     unassigned = [f for f in all_faces if f["person_id"] is None]
+    if det_score_min > 0:
+        conn = db.get_conn()
+        det_scores = {r["face_id"]: r["det_score"] for r in conn.execute(
+            "SELECT face_id, det_score FROM faces WHERE person_id IS NULL AND det_score >= ?",
+            (det_score_min,)
+        ).fetchall()}
+        unassigned = [f for f in unassigned if f["face_id"] in det_scores]
 
     if len(unassigned) < min_samples:
         return {"message": "Not enough unassigned faces to cluster", "unassigned_count": len(unassigned)}
 
     embeddings = np.array([db.blob_to_embedding(f["embedding"]) for f in unassigned])
 
-    # Cosine distance matrix
+    # Cosine distance matrix (clip to avoid negative values from float precision)
     norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
     norms[norms == 0] = 1
     normed = embeddings / norms
-    dist_matrix = 1 - normed @ normed.T
+    dist_matrix = np.clip(1 - normed @ normed.T, 0, 2)
 
     clustering = DBSCAN(eps=eps, min_samples=min_samples, metric="precomputed")
     labels = clustering.fit_predict(dist_matrix)

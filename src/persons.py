@@ -34,6 +34,11 @@ def _load_yaml_persons(path: Path) -> int:
         generation = info.get("generation")
         vault_note = info.get("vault_note")
 
+        # Extract birth year from birth.date (formats: "1874-10-13", "1851", null)
+        birth_info = info.get("birth") or {}
+        raw = birth_info.get("date")
+        birth_year = int(str(raw)[:4]) if raw else None
+
         db.upsert_person(
             person_id=person_id,
             display_name=display_name,
@@ -41,6 +46,7 @@ def _load_yaml_persons(path: Path) -> int:
             gender=gender,
             generation=generation,
             vault_note=vault_note,
+            birth_year=birth_year,
         )
         count += 1
 

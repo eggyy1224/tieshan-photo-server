@@ -69,6 +69,28 @@ CREATE INDEX IF NOT EXISTS idx_faces_person ON faces(person_id);
 CREATE INDEX IF NOT EXISTS idx_anchors_person ON anchors(person_id);
 """
 
+_MIGRATIONS = [
+    ("persons", "birth_year", "ALTER TABLE persons ADD COLUMN birth_year INTEGER"),
+    ("photos", "est_year", "ALTER TABLE photos ADD COLUMN est_year INTEGER"),
+    ("photos", "est_year_lo", "ALTER TABLE photos ADD COLUMN est_year_lo INTEGER"),
+    ("photos", "est_year_hi", "ALTER TABLE photos ADD COLUMN est_year_hi INTEGER"),
+    ("photos", "est_confidence", "ALTER TABLE photos ADD COLUMN est_confidence TEXT"),
+    ("photos", "est_method", "ALTER TABLE photos ADD COLUMN est_method TEXT"),
+    ("photos", "est_n_faces", "ALTER TABLE photos ADD COLUMN est_n_faces INTEGER"),
+    ("photos", "known_year", "ALTER TABLE photos ADD COLUMN known_year INTEGER"),
+]
+
+
+def _run_migrations(conn: sqlite3.Connection) -> None:
+    """Idempotent schema migrations — add columns only if missing."""
+    for table, column, sql in _MIGRATIONS:
+        cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in cols:
+            conn.execute(sql)
+            log.info("migration applied", table=table, column=column)
+    conn.commit()
+
+
 _conn: Optional[sqlite3.Connection] = None
 
 
@@ -96,6 +118,7 @@ def get_conn() -> sqlite3.Connection:
         _conn.execute("PRAGMA journal_mode=WAL")
         _conn.execute("PRAGMA foreign_keys=ON")
         _conn.executescript(_SCHEMA)
+        _run_migrations(_conn)
         log.info("database opened", path=str(PHOTO_DB_PATH))
     return _conn
 
@@ -244,16 +267,18 @@ def upsert_person(
     gender: Optional[str] = None,
     generation: Optional[int] = None,
     vault_note: Optional[str] = None,
+    birth_year: Optional[int] = None,
 ) -> None:
     conn = get_conn()
     conn.execute(
-        """INSERT INTO persons (person_id, display_name, aliases, gender, generation, vault_note)
-           VALUES (?, ?, ?, ?, ?, ?)
+        """INSERT INTO persons (person_id, display_name, aliases, gender, generation, vault_note, birth_year)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(person_id) DO UPDATE SET
              display_name=excluded.display_name, aliases=excluded.aliases,
-             gender=excluded.gender, generation=excluded.generation, vault_note=excluded.vault_note
+             gender=excluded.gender, generation=excluded.generation,
+             vault_note=excluded.vault_note, birth_year=excluded.birth_year
         """,
-        (person_id, display_name, aliases, gender, generation, vault_note),
+        (person_id, display_name, aliases, gender, generation, vault_note, birth_year),
     )
     conn.commit()
 

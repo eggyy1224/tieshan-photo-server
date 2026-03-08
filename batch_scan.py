@@ -143,6 +143,10 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Count files only, don't scan")
     parser.add_argument("--match-only", action="store_true", help="Skip scanning, only run match pass")
     parser.add_argument("--date-estimate", action="store_true", help="Run date estimation after matching")
+    parser.add_argument("--scene-annotate", action="store_true", help="Run scene annotation after matching")
+    parser.add_argument("--scene-limit", type=int, default=0, help="Max photos for scene annotation (0=all)")
+    parser.add_argument("--embed", action="store_true", help="Run image embedding after matching")
+    parser.add_argument("--embed-limit", type=int, default=0, help="Max photos for embedding (0=all)")
     args = parser.parse_args()
 
     # Init DB + persons
@@ -199,6 +203,34 @@ def main():
             )
         else:
             print("No photos with both estimate and known_year for calibration.\n", flush=True)
+
+    # Scene annotation pass
+    if args.scene_annotate:
+        from src.scene_annotate import batch_annotate as scene_batch
+        print("Running scene annotation...", flush=True)
+        scene_stats = scene_batch(limit=args.scene_limit)
+        print(
+            f"\n=== Scene annotation complete ===\n"
+            f"Annotated: {scene_stats['annotated']} | "
+            f"Skipped: {scene_stats['skipped']} | "
+            f"Failed: {scene_stats['failed']} | "
+            f"Total: {scene_stats['total']}\n",
+            flush=True,
+        )
+
+    # Image embedding pass
+    if args.embed:
+        from src.image_embed import batch_embed as embed_batch
+        print("Running image embedding...", flush=True)
+        embed_stats = embed_batch(limit=args.embed_limit)
+        print(
+            f"\n=== Image embedding complete ===\n"
+            f"Embedded: {embed_stats['embedded']} | "
+            f"Skipped: {embed_stats['skipped']} | "
+            f"Failed: {embed_stats['failed']} | "
+            f"Total: {embed_stats['total']}\n",
+            flush=True,
+        )
 
     # Final summary
     stats = db.get_stats()

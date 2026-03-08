@@ -16,6 +16,8 @@ from .tools.photo_stats import photo_stats
 from .tools.photo_cluster import photo_cluster
 from .tools.photo_anchor import photo_anchor
 from .tools.photo_date import photo_date
+from .tools.photo_scene import photo_scene
+from .tools.photo_search import photo_search
 
 mcp = FastMCP(
     "tieshan-photo",
@@ -118,6 +120,81 @@ async def photo_date_tool(mode: str = "stats", photo_id: str = "") -> dict:
         photo_id: estimate 模式需要的照片 ID。
     """
     return await photo_date(mode=mode, photo_id=photo_id)
+
+
+# ── Phase 4 Tools ────────────────────────────────────────────────────
+
+@mcp.tool()
+async def photo_scene_tool(
+    mode: str = "stats",
+    photo_id: str = "",
+    query: str = "",
+    scene_type: str = "",
+    location: str = "",
+    tag: str = "",
+    has_text: bool = False,
+    limit: int = 50,
+    force: bool = False,
+    source_dir: str = "",
+) -> dict:
+    """照片場景標注工具。使用 Gemini Flash Vision 辨識照片中的場景、文字、物件與建築。
+
+    Args:
+        mode:
+          - "stats": 標注進度 + 場景/地點/標籤分布
+          - "annotate": 單張即時標注（需 photo_id）
+          - "batch": 批次標注（尊重 rate limit）
+          - "search": 多條件搜尋已標注照片
+        photo_id: annotate 模式需要的照片 ID。
+        query: search 模式的全文搜尋關鍵字。
+        scene_type: 篩選場景類型（室內/室外/混合/不明）。
+        location: 篩選地點類型。
+        tag: 篩選標籤。
+        has_text: 只搜尋有可見文字的照片。
+        limit: batch 最大數量 / search 結果上限。
+        force: annotate 是否強制重跑。
+        source_dir: batch 篩選特定來源目錄。
+    """
+    return await photo_scene(
+        mode=mode, photo_id=photo_id, query=query,
+        scene_type=scene_type, location=location, tag=tag,
+        has_text=has_text, limit=limit, force=force, source_dir=source_dir,
+    )
+
+
+# ── Phase 5 Tools ────────────────────────────────────────────────────
+
+@mcp.tool()
+async def photo_search_tool(
+    mode: str = "text",
+    query: str = "",
+    photo_id: str = "",
+    photo_path: str = "",
+    limit: int = 20,
+    scene_filter: str = "",
+    source_dir: str = "",
+) -> dict:
+    """照片語意搜尋工具。用自然語言找照片，或用一張照片找視覺相似的照片。
+
+    Args:
+        mode:
+          - "text": 用自然語言描述搜尋照片（如「碑文」「穿和服的合照」「鐵砧山風景」）
+          - "similar": 找視覺相似的照片（需 photo_id 或 photo_path）
+          - "hybrid": 文字搜尋 + 場景條件篩選（結合向量搜尋與 SQL 篩選）
+          - "stats": 嵌入覆蓋率統計
+          - "embed": 單張嵌入（需 photo_id 或 photo_path）
+          - "batch": 批量嵌入所有未處理照片
+        query: text/hybrid 模式的搜尋文字。
+        photo_id: similar/embed 模式的照片 ID。
+        photo_path: similar/embed 模式的照片路徑（替代 photo_id）。
+        limit: 結果上限（text/similar/hybrid）或批量上限（batch）。
+        scene_filter: hybrid 模式的場景類型篩選（如「室外」「室內」）。
+        source_dir: hybrid/batch 模式的來源目錄篩選。
+    """
+    return await photo_search(
+        mode=mode, query=query, photo_id=photo_id, photo_path=photo_path,
+        limit=limit, scene_filter=scene_filter, source_dir=source_dir,
+    )
 
 
 # ── Startup ──────────────────────────────────────────────────────────

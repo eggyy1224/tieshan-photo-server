@@ -7,6 +7,30 @@ from pathlib import Path
 
 _SERVER_DIR = Path(__file__).resolve().parent.parent
 
+
+def _load_dotenv(env_path: Path) -> None:
+    """Lightweight .env loader — no python-dotenv dependency.
+
+    Parses KEY=VALUE lines (skips comments and blank lines).
+    Only sets variables not already in os.environ (no overwrite).
+    """
+    if not env_path.is_file():
+        return
+    with open(env_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip().strip("'\"")
+            if key and key not in os.environ:
+                os.environ[key] = value
+
+
+# Load project-root .env before reading any config values
+_load_dotenv(_SERVER_DIR.parent.parent / ".env")
+
 PHOTO_SERVER_PORT: int = int(os.environ.get("PHOTO_SERVER_PORT", "8788"))
 
 PROJECT_ROOT: Path = Path(
@@ -57,3 +81,14 @@ IMAGE_EXTENSIONS: set[str] = {
 MATCH_HIGH: float = 0.45
 MATCH_MEDIUM: float = 0.35
 MATCH_LOW: float = 0.25
+
+# Gemini Vision configuration (scene annotation)
+GEMINI_API_KEY: str = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_MODEL: str = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_RPM: int = int(os.environ.get("GEMINI_RPM", "14"))
+GEMINI_MAX_DIM: int = int(os.environ.get("GEMINI_MAX_DIM", "1024"))
+
+# SigLIP image embedding (semantic search)
+EMBED_MODEL: str = os.environ.get("EMBED_MODEL", "google/siglip-base-patch16-384")
+EMBED_DIM: int = int(os.environ.get("EMBED_DIM", "768"))
+EMBED_DEVICE: str = os.environ.get("EMBED_DEVICE", "auto")  # auto → mps if available, else cpu

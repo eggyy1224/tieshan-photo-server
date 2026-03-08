@@ -64,9 +64,40 @@ CREATE TABLE IF NOT EXISTS anchors (
     note        TEXT
 );
 
+CREATE TABLE IF NOT EXISTS scenes (
+    scene_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    photo_id      TEXT NOT NULL UNIQUE REFERENCES photos(photo_id),
+    model         TEXT NOT NULL,
+    scene_type    TEXT,
+    location      TEXT,
+    architecture  TEXT,
+    era_clues     TEXT,
+    spatial_desc  TEXT,
+    objects_json  TEXT,
+    texts_json    TEXT,
+    tags_json     TEXT,
+    raw_response  TEXT,
+    annotate_time TEXT,
+    status        TEXT DEFAULT 'done'
+);
+
 CREATE INDEX IF NOT EXISTS idx_faces_photo ON faces(photo_id);
 CREATE INDEX IF NOT EXISTS idx_faces_person ON faces(person_id);
 CREATE INDEX IF NOT EXISTS idx_anchors_person ON anchors(person_id);
+CREATE INDEX IF NOT EXISTS idx_scenes_photo ON scenes(photo_id);
+CREATE INDEX IF NOT EXISTS idx_scenes_type ON scenes(scene_type);
+CREATE INDEX IF NOT EXISTS idx_scenes_location ON scenes(location);
+
+CREATE TABLE IF NOT EXISTS image_embeddings (
+    embed_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    photo_id    TEXT NOT NULL REFERENCES photos(photo_id),
+    model       TEXT NOT NULL,
+    embedding   BLOB NOT NULL,
+    embed_time  TEXT NOT NULL,
+    UNIQUE(photo_id, model)
+);
+CREATE INDEX IF NOT EXISTS idx_image_embed_photo ON image_embeddings(photo_id);
+CREATE INDEX IF NOT EXISTS idx_image_embed_model ON image_embeddings(model);
 """
 
 _MIGRATIONS = [
@@ -78,6 +109,8 @@ _MIGRATIONS = [
     ("photos", "est_method", "ALTER TABLE photos ADD COLUMN est_method TEXT"),
     ("photos", "est_n_faces", "ALTER TABLE photos ADD COLUMN est_n_faces INTEGER"),
     ("photos", "known_year", "ALTER TABLE photos ADD COLUMN known_year INTEGER"),
+    ("photos", "scene_status", "ALTER TABLE photos ADD COLUMN scene_status TEXT DEFAULT 'pending'"),
+    ("photos", "embed_status", "ALTER TABLE photos ADD COLUMN embed_status TEXT DEFAULT 'pending'"),
 ]
 
 
@@ -384,3 +417,239 @@ def get_stats_by_person() -> list[dict[str, Any]]:
            ORDER BY photo_count DESC"""
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ── Scenes CRUD ─────────────────────────────────────────────────────
+
+def upsert_scene(
+    photo_id: str,
+    model: str,
+    scene_type: Optional[str] = None,
+    location: Optional[str] = None,
+    architecture: Optional[str] = None,
+    era_clues: Optional[str] = None,
+    spatial_desc: Optional[str] = None,
+    objects_json: Optional[str] = None,
+    texts_json: Optional[str] = None,
+    tags_json: Optional[str] = None,
+    raw_response: Optional[str] = None,
+) -> None:
+    """Insert or replace a scene annotation for a photo."""
+    conn = get_conn()
+    conn.execute(
+        """INSERT INTO scenes
+             (photo_id, model, scene_type, location, architecture,
+              era_clues, spatial_desc, objects_json, texts_json,
+              tags_json, raw_response, annotate_time, status)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'done')
+           ON CONFLICT(photo_id) DO UPDATE SET
+             model=excluded.model, scene_type=excluded.scene_type,
+             location=excluded.location, architecture=excluded.architecture,
+             era_clues=excluded.era_clues, spatial_desc=excluded.spatial_desc,
+             objects_json=excluded.objects_json, texts_json=excluded.texts_json,
+             tags_json=excluded.tags_json, raw_response=excluded.raw_response,
+             annotate_time=excluded.annotate_time, status='done'
+        """,
+        (
+            photo_id, model, scene_type, location, architecture,
+            era_clues, spatial_desc, objects_json, texts_json,
+            tags_json, raw_response, time.strftime("%Y-%m-%dT%H:%M:%S"),
+        ),
+    )
+    conn.commit()
+
+
+def get_scene(photo_id: str) -> Optional[dict[str, Any]]:
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM scenes WHERE photo_id=?", (photo_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def mark_scene_status(photo_id: str, status: str) -> None:
+    """Update scene_status on the photos table."""
+    conn = get_conn()
+    conn.execute(
+        "UPDATE photos SET scene_status=? WHERE photo_id=?",
+        (status, photo_id),
+    )
+    conn.commit()
+
+
+def search_scenes_db(
+    query: str = "",
+    scene_type: str = "",
+    location: str = "",
+    tag: str = "",
+    has_text: bool = False,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Multi-condition search on scenes + photos."""
+    conn = get_conn()
+    conditions: list[str] = []
+    params: list[Any] = []
+
+    if query:
+        conditions.append(
+            "(s.spatial_desc LIKE ? OR s.objects_json LIKE ? OR s.era_clues LIKE ? OR s.architecture LIKE ?)"
+        )
+        q = f"%{query}%"
+        params.extend([q, q, q, q])
+    if scene_type:
+        conditions.append("s.scene_type = ?")
+        params.append(scene_type)
+    if location:
+        conditions.append("s.location LIKE ?")
+        params.append(f"%{location}%")
+    if tag:
+        conditions.append("s.tags_json LIKE ?")
+        params.append(f"%{tag}%")
+    if has_text:
+        conditions.append("s.texts_json IS NOT NULL AND s.texts_json != '[]' AND s.texts_json != 'null'")
+
+    where = " AND ".join(conditions) if conditions else "1=1"
+    rows = conn.execute(
+        f"""SELECT s.*, p.rel_path, p.source_dir, p.filename
+            FROM scenes s
+            JOIN photos p ON s.photo_id = p.photo_id
+            WHERE {where}
+            ORDER BY s.annotate_time DESC
+            LIMIT ?""",
+        params + [limit],
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# ── Image Embeddings CRUD ──────────────────────────────────────────
+
+def upsert_image_embedding(
+    photo_id: str,
+    model: str,
+    embedding: np.ndarray,
+) -> None:
+    """Insert or replace whole-image embedding for a photo."""
+    conn = get_conn()
+    conn.execute(
+        """INSERT INTO image_embeddings (photo_id, model, embedding, embed_time)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(photo_id, model) DO UPDATE SET
+             embedding=excluded.embedding, embed_time=excluded.embed_time
+        """,
+        (photo_id, model, embedding_to_blob(embedding), time.strftime("%Y-%m-%dT%H:%M:%S")),
+    )
+    conn.execute(
+        "UPDATE photos SET embed_status='done' WHERE photo_id=?",
+        (photo_id,),
+    )
+    conn.commit()
+
+
+def get_image_embedding(photo_id: str, model: str) -> Optional[np.ndarray]:
+    """Get a single photo's image embedding. Returns None if not found."""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT embedding FROM image_embeddings WHERE photo_id=? AND model=?",
+        (photo_id, model),
+    ).fetchone()
+    if row is None:
+        return None
+    return blob_to_embedding(row["embedding"])
+
+
+def get_all_image_embeddings(model: str) -> list[dict[str, Any]]:
+    """Get all image embeddings for a given model. Returns list of {photo_id, embedding}."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT photo_id, embedding FROM image_embeddings WHERE model=?",
+        (model,),
+    ).fetchall()
+    return [{"photo_id": r["photo_id"], "embedding": blob_to_embedding(r["embedding"])} for r in rows]
+
+
+def get_embed_stats(model: str = "") -> dict[str, Any]:
+    """Aggregate image embedding statistics."""
+    conn = get_conn()
+    total_photos = conn.execute("SELECT COUNT(*) FROM photos").fetchone()[0]
+
+    if model:
+        embedded = conn.execute(
+            "SELECT COUNT(*) FROM image_embeddings WHERE model=?", (model,)
+        ).fetchone()[0]
+    else:
+        embedded = conn.execute("SELECT COUNT(*) FROM image_embeddings").fetchone()[0]
+
+    pending = conn.execute(
+        "SELECT COUNT(*) FROM photos WHERE embed_status='pending'"
+    ).fetchone()[0]
+    done = conn.execute(
+        "SELECT COUNT(*) FROM photos WHERE embed_status='done'"
+    ).fetchone()[0]
+    failed = conn.execute(
+        "SELECT COUNT(*) FROM photos WHERE embed_status='failed'"
+    ).fetchone()[0]
+
+    return {
+        "total_photos": total_photos,
+        "embedded": embedded,
+        "pending": pending,
+        "done": done,
+        "failed": failed,
+        "coverage_pct": round(100 * embedded / total_photos, 1) if total_photos else 0,
+    }
+
+
+def mark_embed_status(photo_id: str, status: str) -> None:
+    """Update embed_status on the photos table."""
+    conn = get_conn()
+    conn.execute(
+        "UPDATE photos SET embed_status=? WHERE photo_id=?",
+        (status, photo_id),
+    )
+    conn.commit()
+
+
+def get_scene_stats_db() -> dict[str, Any]:
+    """Aggregate scene annotation statistics."""
+    conn = get_conn()
+    total_scanned = conn.execute(
+        "SELECT COUNT(*) FROM photos WHERE scan_status='scanned'"
+    ).fetchone()[0]
+    annotated = conn.execute("SELECT COUNT(*) FROM scenes").fetchone()[0]
+
+    by_type = conn.execute(
+        """SELECT scene_type, COUNT(*) as cnt FROM scenes
+           GROUP BY scene_type ORDER BY cnt DESC"""
+    ).fetchall()
+
+    by_location = conn.execute(
+        """SELECT location, COUNT(*) as cnt FROM scenes
+           WHERE location IS NOT NULL
+           GROUP BY location ORDER BY cnt DESC LIMIT 20"""
+    ).fetchall()
+
+    with_text = conn.execute(
+        "SELECT COUNT(*) FROM scenes WHERE texts_json IS NOT NULL AND texts_json != '[]' AND texts_json != 'null'"
+    ).fetchone()[0]
+
+    # Top tags: parse tags_json across all scenes
+    tag_rows = conn.execute("SELECT tags_json FROM scenes WHERE tags_json IS NOT NULL").fetchall()
+    tag_counts: dict[str, int] = {}
+    import json as _json
+    for r in tag_rows:
+        try:
+            tags = _json.loads(r["tags_json"])
+            if isinstance(tags, list):
+                for t in tags:
+                    tag_counts[t] = tag_counts.get(t, 0) + 1
+        except (ValueError, TypeError):
+            pass
+    top_tags = sorted(tag_counts.items(), key=lambda x: -x[1])[:20]
+
+    return {
+        "total_scanned": total_scanned,
+        "annotated": annotated,
+        "coverage_pct": round(100 * annotated / total_scanned, 1) if total_scanned else 0,
+        "with_text": with_text,
+        "by_scene_type": [dict(r) for r in by_type],
+        "by_location": [dict(r) for r in by_location],
+        "top_tags": [{"tag": t, "count": c} for t, c in top_tags],
+    }

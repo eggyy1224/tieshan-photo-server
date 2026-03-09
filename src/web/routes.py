@@ -328,6 +328,7 @@ def register_routes(mcp) -> None:  # noqa: ANN001 (FastMCP type)
             face_id=int(face_id),
             person_id=str(person_id),
             note=str(note) if note else "",
+            scope="photo",
         )
         if "error" in result:
             return JSONResponse(result, status_code=400)
@@ -392,13 +393,36 @@ def register_routes(mcp) -> None:  # noqa: ANN001 (FastMCP type)
                 status_code=400,
             )
 
+        # Mark as 'rejected' so cascade re-matching skips this face
         conn.execute(
-            "UPDATE faces SET person_id=NULL, match_score=NULL, match_method=NULL WHERE face_id=?",
+            "UPDATE faces SET person_id=NULL, match_score=NULL, match_method='rejected' WHERE face_id=?",
             (face_id,),
         )
         conn.commit()
 
         return JSONResponse({"cleared": True, "face_id": face_id})
+
+    # ── POST /api/face/{face_id}/unreject — Undo rejection ────────
+
+    @mcp.custom_route("/api/face/{face_id}/unreject", methods=["POST"])
+    async def api_unreject(request: Request) -> JSONResponse:
+        face_id = int(request.path_params["face_id"])
+        conn = db.get_conn()
+
+        face = conn.execute(
+            "SELECT face_id, match_method FROM faces WHERE face_id=?",
+            (face_id,),
+        ).fetchone()
+        if not face:
+            return JSONResponse({"error": "FACE_NOT_FOUND"}, status_code=404)
+
+        conn.execute(
+            "UPDATE faces SET match_method=NULL WHERE face_id=?",
+            (face_id,),
+        )
+        conn.commit()
+
+        return JSONResponse({"unrejected": True, "face_id": face_id})
 
     # ── GET /api/source_dirs — Available source directories ─────────
 

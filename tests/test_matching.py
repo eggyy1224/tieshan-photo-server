@@ -2,28 +2,11 @@
 
 from __future__ import annotations
 
-import os
-import tempfile
-
 import numpy as np
 import pytest
 
-_tmpdir = tempfile.mkdtemp()
-os.environ["PHOTO_DB_PATH"] = os.path.join(_tmpdir, "test_match.db")
-
 from src import db
 from src.matching import cosine_similarity, confidence_level, match_face
-
-
-@pytest.fixture(autouse=True)
-def fresh_db():
-    db.close()
-    test_path = os.path.join(_tmpdir, "test_match.db")
-    if os.path.exists(test_path):
-        os.remove(test_path)
-    db._conn = None
-    yield
-    db.close()
 
 
 class TestCosineSimilarity:

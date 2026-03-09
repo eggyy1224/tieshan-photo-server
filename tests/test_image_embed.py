@@ -2,34 +2,19 @@
 
 from __future__ import annotations
 
-import os
-import tempfile
-
 import numpy as np
 import pytest
 
-# Override DB path before importing db module (if not already set by another test)
-if "PHOTO_DB_PATH" not in os.environ:
-    _tmpdir = tempfile.mkdtemp()
-    os.environ["PHOTO_DB_PATH"] = os.path.join(_tmpdir, "test_face.db")
-
 from src import db
-from src.config import EMBED_DIM, EMBED_MODEL, PHOTO_DB_PATH
+from src.config import EMBED_DIM, EMBED_MODEL
 
 
 @pytest.fixture(autouse=True)
-def fresh_db():
-    """Ensure a fresh database for each test."""
-    db.close()
-    db_path = str(PHOTO_DB_PATH)
-    if os.path.exists(db_path):
-        os.remove(db_path)
-    db._conn = None
-    # Also invalidate embed cache
+def _invalidate_embed_cache():
+    """Also invalidate embed cache on top of conftest fresh_db."""
     from src.image_embed import _invalidate_cache
     _invalidate_cache()
     yield
-    db.close()
 
 
 class TestImageEmbeddingsCRUD:

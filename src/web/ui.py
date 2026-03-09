@@ -210,6 +210,8 @@ body {
 .btn-clear:hover { background: #991b1b; }
 .btn-undo { background: #7f1d1d; color: #fca5a5; }
 .btn-undo:hover { background: #991b1b; }
+.btn-restore { background: #1e3a5f; color: #7dd3fc; }
+.btn-restore:hover { background: #1e4a7f; }
 
 /* ── Bottom Bar: Person Reference ───────────────────────────── */
 .person-bar {
@@ -228,6 +230,26 @@ body {
 }
 .person-ref img:hover { border-color: #3498db; }
 .person-ref .pname { font-size: 10px; text-align: center; margin-top: 2px; }
+
+/* Busy overlay — shown during anchor/clear operations */
+.busy-overlay {
+  position: absolute; inset: 0;
+  background: rgba(0,0,0,0.35);
+  display: none; align-items: center; justify-content: center;
+  z-index: 50; pointer-events: all;
+}
+.busy-overlay.show { display: flex; }
+.busy-spinner {
+  width: 36px; height: 36px;
+  border: 3px solid rgba(255,255,255,0.2);
+  border-top-color: #3498db;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.busy-label {
+  margin-left: 12px; color: #ccc; font-size: 14px;
+}
 
 /* Toast notifications */
 .toast {
@@ -272,6 +294,10 @@ body {
     <div class="no-photo" id="noPhoto">← 選擇一張照片</div>
     <canvas id="mainCanvas" style="display:none"></canvas>
     <div class="loading-overlay" id="loadingOverlay">載入中...</div>
+    <div class="busy-overlay" id="busyOverlay">
+      <div class="busy-spinner"></div>
+      <span class="busy-label" id="busyLabel">處理中...</span>
+    </div>
   </div>
 
   <!-- Right: Face inspector -->
@@ -305,6 +331,8 @@ const S = {
   selectedFaceId: null,
   expandedFaceId: null,
   hoveredFaceIdx: -1,
+  busy: false,  // lock to prevent concurrent anchor/clear operations
+  hideBoxes: false,  // Ctrl+S toggle to view photo without bbox overlay
 };
 
 // ── API ───────────────────────────────────────────────────────────
@@ -507,7 +535,7 @@ function drawCanvas() {
   const ctx = canvas.getContext('2d');
   ctx.drawImage(img, 0, 0, cw, ch);
 
-  if (!S.currentPhotoData) return;
+  if (!S.currentPhotoData || S.hideBoxes) return;
   const faces = S.currentPhotoData.faces;
 
   // Adaptive font size based on image size
@@ -574,7 +602,7 @@ function renderFaceCards() {
     return;
   }
 
-  // Group faces
+  // Group faces (rejected = user explicitly cleared, treat as unidentified)
   const unidFaces = faces.filter(f => !f.person_id);
   const autoFaces = faces.filter(f => f.person_id && f.match_method !== 'anchor');
   const anchoredFaces = faces.filter(f => f.match_method === 'anchor');
@@ -615,8 +643,10 @@ function buildFaceEntry(f, allFaces) {
   const isSelected = (f.face_id === S.selectedFaceId);
   const isAnchored = f.match_method === 'anchor';
   const isAutoMatch = f.person_id && !isAnchored;
+  const isRejected = f.match_method === 'rejected';
   const personName = f.person_id
-    ? (S.personsMap[f.person_id]?.display_name || f.person_id) : '未辨識';
+    ? (S.personsMap[f.person_id]?.display_name || f.person_id)
+    : (isRejected ? '已排除' : '未辨識');
 
   if (isExpanded) {
     return buildExpandedCard(f, idx, isAnchored, isAutoMatch, personName);
@@ -631,7 +661,9 @@ function buildFaceEntry(f, allFaces) {
   const nameClass = isAnchored ? 'is-anchor' : isAutoMatch ? 'is-auto' : 'is-unid';
 
   let actionsHtml = '';
-  if (isAutoMatch) {
+  if (isRejected) {
+    actionsHtml = `<button class="btn-sm btn-restore" onclick="unrejectFace(${f.face_id}, event)">恢復</button>`;
+  } else if (isAutoMatch) {
     actionsHtml = `<button class="btn-sm btn-clear" onclick="clearAutoMatch(${f.face_id}, event)">✕</button>`;
   } else if (isAnchored) {
     actionsHtml = `<button class="btn-sm btn-undo" onclick="removeAnchor(${f.face_id}, event)">撤回</button>`;
@@ -668,15 +700,19 @@ function buildExpandedCard(f, idx, isAnchored, isAutoMatch, personName) {
   const cropClass = isAnchored ? 'anchor' : isAutoMatch ? 'auto-match' : 'unid';
   const nameClass = isAnchored ? 'anchored' : isAutoMatch ? 'auto' : '';
 
+  const isRejected = f.match_method === 'rejected';
   let statusHtml = '';
   if (isAnchored) statusHtml = '<div style="color:#2ecc71;font-size:11px">✓ 已錨定</div>';
   else if (isAutoMatch) statusHtml = `<div style="color:#f39c12;font-size:11px">自動匹配 (${f.match_score?.toFixed(3)})</div>`;
+  else if (isRejected) statusHtml = '<div style="color:#e74c3c;font-size:11px">已排除自動匹配</div>';
 
   let actionsHtml = '';
   if (isAnchored) {
     actionsHtml = `<button class="btn-sm btn-undo" onclick="removeAnchor(${f.face_id}, event)">撤回錨定</button>`;
   } else if (isAutoMatch) {
     actionsHtml = `<button class="btn-sm btn-clear" onclick="clearAutoMatch(${f.face_id}, event)">✕ 清除匹配</button>`;
+  } else if (isRejected) {
+    actionsHtml = `<button class="btn-sm btn-restore" onclick="unrejectFace(${f.face_id}, event)">恢復自動匹配</button>`;
   }
 
   // Matches
@@ -758,9 +794,23 @@ function selectFace(faceId, idx) {
   }, 50);
 }
 
+// ── Busy State ────────────────────────────────────────────────────
+function setBusy(label = '處理中...') {
+  S.busy = true;
+  const ov = document.getElementById('busyOverlay');
+  document.getElementById('busyLabel').textContent = label;
+  ov.classList.add('show');
+}
+function clearBusy() {
+  S.busy = false;
+  document.getElementById('busyOverlay').classList.remove('show');
+}
+
 // ── Anchor Actions ────────────────────────────────────────────────
 async function confirmAnchor(faceId, personId, event) {
   if (event) event.stopPropagation();
+  if (S.busy) return;
+  setBusy('錨定中...');
 
   try {
     const resp = await fetch('/api/anchor', {
@@ -792,6 +842,8 @@ async function confirmAnchor(faceId, personId, event) {
     }
   } catch (err) {
     toast(`錯誤: ${err.message}`, true);
+  } finally {
+    clearBusy();
   }
 }
 
@@ -805,6 +857,8 @@ async function manualAssign(faceId, personId, selectEl) {
 
 async function removeAnchor(faceId, event) {
   if (event) event.stopPropagation();
+  if (S.busy) return;
+  setBusy('撤回中...');
   try {
     const resp = await fetch(`/api/anchor/${faceId}`, { method: 'DELETE' });
     const result = await resp.json();
@@ -812,10 +866,27 @@ async function removeAnchor(faceId, event) {
     toast(`已撤回 ${result.display_name} 的錨定`);
     if (S.currentPhoto) await selectPhoto(S.currentPhoto);
   } catch (err) { toast(`錯誤: ${err.message}`, true); }
+  finally { clearBusy(); }
+}
+
+async function unrejectFace(faceId, event) {
+  if (event) event.stopPropagation();
+  if (S.busy) return;
+  setBusy('恢復中...');
+  try {
+    const resp = await fetch(`/api/face/${faceId}/unreject`, { method: 'POST' });
+    const result = await resp.json();
+    if (result.error) { toast(`錯誤: ${result.message || result.error}`, true); return; }
+    toast('已恢復，可重新匹配');
+    if (S.currentPhoto) await selectPhoto(S.currentPhoto);
+  } catch (err) { toast(`錯誤: ${err.message}`, true); }
+  finally { clearBusy(); }
 }
 
 async function clearAutoMatch(faceId, event) {
   if (event) event.stopPropagation();
+  if (S.busy) return;
+  setBusy('清除中...');
   try {
     const resp = await fetch(`/api/face/${faceId}/clear`, { method: 'POST' });
     const result = await resp.json();
@@ -823,6 +894,7 @@ async function clearAutoMatch(faceId, event) {
     toast('已清除自動匹配');
     if (S.currentPhoto) await selectPhoto(S.currentPhoto);
   } catch (err) { toast(`錯誤: ${err.message}`, true); }
+  finally { clearBusy(); }
 }
 
 // ── Canvas Click/Move ─────────────────────────────────────────────
@@ -869,6 +941,15 @@ function onCanvasMove(e) {
 
 // ── Keyboard ──────────────────────────────────────────────────────
 function onKeyDown(e) {
+  // Ctrl+S: toggle bbox overlay
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+    e.preventDefault();
+    S.hideBoxes = !S.hideBoxes;
+    drawCanvas();
+    toast(S.hideBoxes ? '框線已隱藏（Ctrl+S 恢復）' : '框線已顯示');
+    return;
+  }
+
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
 
   const photos = S.photos;

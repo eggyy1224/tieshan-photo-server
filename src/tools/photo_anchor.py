@@ -6,16 +6,23 @@ from .. import db, log
 from ..matching import match_face
 
 
-async def photo_anchor(face_id: int, person_id: str, note: str = "") -> dict:
+async def photo_anchor(
+    face_id: int,
+    person_id: str,
+    note: str = "",
+    scope: str = "all",
+) -> dict:
     """Mark a detected face as a specific person.
 
     This creates an anchor entry and triggers re-matching of
-    all unmatched faces against the updated anchor set.
+    unmatched faces against the updated anchor set.
 
     Args:
         face_id: The face to anchor.
         person_id: The person_id from family_tree.
         note: Optional annotation.
+        scope: "photo" to only re-match faces in the same photo (fast, for UI),
+               "all" to re-match all unmatched faces globally (thorough, for MCP).
 
     Returns:
         Dict with anchor_id and updated match counts.
@@ -47,9 +54,20 @@ async def photo_anchor(face_id: int, person_id: str, note: str = "") -> dict:
     log.info("anchor created", anchor_id=anchor_id, face_id=face_id, person=person["display_name"])
 
     # Re-match unmatched faces against updated anchors
-    unmatched = db.get_conn().execute(
-        "SELECT face_id, embedding FROM faces WHERE person_id IS NULL"
-    ).fetchall()
+    # Skip faces with match_method='rejected' (user explicitly cleared)
+    if scope == "photo":
+        # UI mode: only re-match faces in the same photo (fast)
+        unmatched = db.get_conn().execute(
+            "SELECT face_id, embedding FROM faces "
+            "WHERE photo_id=? AND person_id IS NULL AND COALESCE(match_method,'') != 'rejected'",
+            (face["photo_id"],),
+        ).fetchall()
+    else:
+        # MCP mode: re-match all unmatched faces globally (thorough)
+        unmatched = db.get_conn().execute(
+            "SELECT face_id, embedding FROM faces "
+            "WHERE person_id IS NULL AND COALESCE(match_method,'') != 'rejected'"
+        ).fetchall()
 
     new_matches = 0
     for row in unmatched:

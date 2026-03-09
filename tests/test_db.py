@@ -2,29 +2,10 @@
 
 from __future__ import annotations
 
-import os
-import tempfile
-
 import numpy as np
 import pytest
 
-# Override DB path before importing db module
-_tmpdir = tempfile.mkdtemp()
-os.environ["PHOTO_DB_PATH"] = os.path.join(_tmpdir, "test_face.db")
-
 from src import db
-
-
-@pytest.fixture(autouse=True)
-def fresh_db():
-    """Ensure a fresh database for each test."""
-    db.close()
-    test_path = os.path.join(_tmpdir, "test_face.db")
-    if os.path.exists(test_path):
-        os.remove(test_path)
-    db._conn = None
-    yield
-    db.close()
 
 
 class TestPhotos:

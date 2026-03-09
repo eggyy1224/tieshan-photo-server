@@ -86,7 +86,7 @@ def register_routes(mcp) -> None:  # noqa: ANN001 (FastMCP type)
             )
 
         where = " AND ".join(conditions)
-        limit = min(int(request.query_params.get("limit", "200")), 1000)
+        limit = min(int(request.query_params.get("limit", "200")), 10000)
         offset = int(request.query_params.get("offset", "0"))
 
         rows = conn.execute(
@@ -435,3 +435,87 @@ def register_routes(mcp) -> None:  # noqa: ANN001 (FastMCP type)
                GROUP BY source_dir ORDER BY count DESC"""
         ).fetchall()
         return JSONResponse({"source_dirs": [dict(r) for r in rows]})
+
+    # ── GET /api/dashboard — Aggregate stats for overview ─────────
+
+    @mcp.custom_route("/api/dashboard", methods=["GET"])
+    async def api_dashboard(request: Request) -> JSONResponse:
+        conn = db.get_conn()
+
+        # Total scanned photos
+        total_photos = conn.execute(
+            "SELECT COUNT(*) FROM photos WHERE scan_status='scanned'"
+        ).fetchone()[0]
+
+        # Face status counts
+        face_row = conn.execute(
+            """SELECT
+                   COUNT(*) as total,
+                   SUM(CASE WHEN match_method='anchor' THEN 1 ELSE 0 END) as anchored,
+                   SUM(CASE WHEN person_id IS NOT NULL
+                            AND COALESCE(match_method,'') != 'anchor' THEN 1 ELSE 0 END) as auto_matched,
+                   SUM(CASE WHEN match_method='rejected' THEN 1 ELSE 0 END) as rejected
+               FROM faces"""
+        ).fetchone()
+        total_faces = face_row["total"] or 0
+        anchored = face_row["anchored"] or 0
+        auto_matched = face_row["auto_matched"] or 0
+        rejected = face_row["rejected"] or 0
+        unidentified = total_faces - anchored - auto_matched - rejected
+        identified = anchored + auto_matched
+
+        # Per-person stats (only persons with at least one match)
+        person_rows = conn.execute(
+            """SELECT p.person_id, p.display_name,
+                      SUM(CASE WHEN f.match_method='anchor' THEN 1 ELSE 0 END) as anchor_count,
+                      SUM(CASE WHEN f.person_id IS NOT NULL
+                               AND COALESCE(f.match_method,'') != 'anchor' THEN 1 ELSE 0 END) as auto_count
+               FROM persons p
+               JOIN faces f ON f.person_id = p.person_id
+               GROUP BY p.person_id
+               ORDER BY (anchor_count + auto_count) DESC"""
+        ).fetchall()
+
+        # Per-source-dir stats
+        dir_rows = conn.execute(
+            """SELECT p.source_dir,
+                      COUNT(DISTINCT p.photo_id) as photo_count,
+                      COUNT(f.face_id) as face_count,
+                      SUM(CASE WHEN f.person_id IS NOT NULL THEN 1 ELSE 0 END) as identified
+               FROM photos p
+               LEFT JOIN faces f ON f.photo_id = p.photo_id
+               WHERE p.scan_status='scanned'
+               GROUP BY p.source_dir
+               ORDER BY photo_count DESC"""
+        ).fetchall()
+
+        # Top photos with most unidentified faces
+        top_unid = conn.execute(
+            """SELECT p.photo_id, p.filename, p.source_dir, p.face_count,
+                      COUNT(f.face_id) as unid_count
+               FROM photos p
+               JOIN faces f ON f.photo_id = p.photo_id
+               WHERE f.person_id IS NULL
+                 AND COALESCE(f.match_method,'') != 'rejected'
+                 AND p.scan_status='scanned'
+               GROUP BY p.photo_id
+               ORDER BY unid_count DESC
+               LIMIT 10"""
+        ).fetchall()
+
+        return JSONResponse({
+            "total_photos": total_photos,
+            "total_faces": total_faces,
+            "anchored": anchored,
+            "auto_matched": auto_matched,
+            "rejected": rejected,
+            "unidentified": unidentified,
+            "coverage_pct": round(identified / total_faces * 100, 1) if total_faces > 0 else 0,
+            "persons": [dict(r) for r in person_rows],
+            "source_dirs": [
+                {**dict(r), "coverage_pct": round((r["identified"] or 0) / r["face_count"] * 100, 1)
+                 if r["face_count"] else 0}
+                for r in dir_rows
+            ],
+            "top_unid_photos": [dict(r) for r in top_unid],
+        })

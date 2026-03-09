@@ -169,6 +169,40 @@ class TestSourceDirsAPI:
         assert dirs[0]["source_dir"] == "test"
 
 
+# ── GET /api/dashboard ───────────────────────────────────────────
+
+class TestDashboardAPI:
+    def test_empty_db(self, client):
+        r = client.get("/api/dashboard")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["total_faces"] == 0
+        assert data["coverage_pct"] == 0
+        assert data["persons"] == []
+
+    def test_with_data(self, client, seeded_db):
+        r = client.get("/api/dashboard")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["total_faces"] == 3
+        assert data["total_photos"] == 1
+        assert data["unidentified"] == 3
+        assert data["anchored"] == 0
+        assert len(data["source_dirs"]) >= 1
+        assert len(data["top_unid_photos"]) >= 1
+
+    def test_after_anchor(self, client, seeded_db):
+        fid = seeded_db["face_ids"][0]
+        client.post("/api/anchor", json={"face_id": fid, "person_id": "xu_tiancui"})
+
+        r = client.get("/api/dashboard")
+        data = r.json()
+        assert data["anchored"] >= 1
+        assert data["coverage_pct"] > 0
+        assert len(data["persons"]) >= 1
+        assert data["persons"][0]["person_id"] == "xu_tiancui"
+
+
 # ── POST /api/anchor ─────────────────────────────────────────────
 
 class TestAnchorAPI:

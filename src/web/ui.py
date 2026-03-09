@@ -50,9 +50,9 @@ body {
 /* ── Main Layout ────────────────────────────────────────────── */
 .main { display: flex; flex: 1; overflow: hidden; }
 
-/* ── Left Panel: Photo List ─────────────────────────────────── */
+/* ── Left Panel: Photo List (Tree) ──────────────────────────── */
 .photo-list {
-  width: 260px; min-width: 200px;
+  width: 280px; min-width: 220px;
   border-right: 1px solid #333;
   display: flex; flex-direction: column;
   background: #16213e;
@@ -64,10 +64,29 @@ body {
   font-size: 13px;
 }
 .photo-list-items { flex: 1; overflow-y: auto; }
+
+/* Directory node in tree */
+.dir-node {
+  display: flex; align-items: center; gap: 4px;
+  padding: 4px 6px; cursor: pointer;
+  font-size: 12px; font-weight: 600; color: #bbb;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  user-select: none;
+}
+.dir-node:hover { background: #0f3460; }
+.dir-arrow { width: 12px; font-size: 9px; color: #666; flex-shrink: 0; text-align: center; }
+.dir-name {
+  flex: 1; min-width: 0; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.dir-count { font-size: 10px; color: #666; margin-right: 2px; }
+
+/* Photo item in tree */
 .photo-item {
-  padding: 6px 10px; cursor: pointer;
-  border-bottom: 1px solid rgba(255,255,255,0.04);
-  font-size: 13px; display: flex; align-items: center; gap: 6px;
+  display: flex; align-items: center; gap: 6px;
+  padding: 3px 6px; cursor: pointer;
+  border-bottom: 1px solid rgba(255,255,255,0.02);
+  font-size: 12px;
 }
 .photo-item:hover { background: #0f3460; }
 .photo-item.active { background: #1a5276; border-left: 3px solid #3498db; }
@@ -75,13 +94,15 @@ body {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
   min-width: 0;
 }
-.photo-item .badge {
-  border-radius: 10px; padding: 1px 7px;
-  font-size: 11px; white-space: nowrap; font-weight: 600;
+
+/* Shared badge style for dirs and photos */
+.badge {
+  border-radius: 10px; padding: 1px 6px;
+  font-size: 10px; white-space: nowrap; font-weight: 600;
 }
-.photo-item .badge.all-done { background: #1e6e3e; color: #8f8; }
-.photo-item .badge.has-unid { background: #b45309; color: #fed; }
-.photo-item .badge.no-face { background: #333; color: #777; }
+.badge.all-done { background: #1e6e3e; color: #8f8; }
+.badge.has-unid { background: #b45309; color: #fed; }
+.badge.no-face { background: #333; color: #777; }
 
 /* ── Center: Canvas ─────────────────────────────────────────── */
 .canvas-area {
@@ -251,6 +272,80 @@ body {
   margin-left: 12px; color: #ccc; font-size: 14px;
 }
 
+/* ── Dashboard (right panel default view) ───────────────────── */
+.dash-section {
+  padding: 10px 12px; border-bottom: 1px solid #222;
+}
+.dash-title {
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.5px; color: #888; margin-bottom: 8px;
+}
+.dash-progress {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 8px;
+}
+.dash-progress-track {
+  flex: 1; height: 8px; background: #222; border-radius: 4px; overflow: hidden;
+}
+.dash-progress-fill {
+  height: 100%; border-radius: 4px;
+  background: linear-gradient(90deg, #27ae60, #2ecc71);
+  transition: width 0.4s;
+}
+.dash-pct { font-size: 14px; font-weight: 700; color: #2ecc71; min-width: 48px; text-align: right; }
+.dash-stats-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
+}
+.dash-stat {
+  background: #0f1a2e; border-radius: 6px; padding: 6px 10px;
+  display: flex; flex-direction: column; align-items: center;
+}
+.dash-stat-num { font-size: 16px; font-weight: 700; }
+.dash-stat-label { font-size: 10px; color: #888; }
+
+.dash-person-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 0; font-size: 12px;
+}
+.dash-person-img {
+  width: 28px; height: 28px; border-radius: 3px;
+  object-fit: cover; flex-shrink: 0; background: #222;
+}
+.dash-person-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-person-counts { font-size: 11px; white-space: nowrap; color: #888; }
+.dash-person-bar {
+  width: 50px; height: 4px; background: #222; border-radius: 2px; overflow: hidden; flex-shrink: 0;
+}
+.dash-person-bar-fill { height: 100%; background: #2ecc71; border-radius: 2px; }
+
+.dash-source-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 0; font-size: 12px;
+}
+.dash-source-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-source-count { font-size: 10px; color: #888; white-space: nowrap; }
+.dash-source-bar {
+  width: 50px; height: 4px; background: #222; border-radius: 2px; overflow: hidden; flex-shrink: 0;
+}
+.dash-source-bar-fill { height: 100%; background: #3498db; border-radius: 2px; }
+.dash-source-pct { font-size: 10px; color: #888; width: 32px; text-align: right; }
+
+.dash-photo-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 6px; font-size: 12px; cursor: pointer;
+  border-radius: 4px;
+}
+.dash-photo-row:hover { background: #0f3460; }
+.dash-photo-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-photo-badge {
+  font-size: 10px; background: #b45309; color: #fed;
+  padding: 1px 6px; border-radius: 8px; white-space: nowrap;
+}
+.back-link {
+  font-size: 12px; color: #3498db; cursor: pointer;
+  padding: 2px 6px; border-radius: 3px;
+}
+.back-link:hover { background: rgba(52,152,219,0.15); }
+
 /* Toast notifications */
 .toast {
   position: fixed; bottom: 20px; right: 20px;
@@ -300,15 +395,13 @@ body {
     </div>
   </div>
 
-  <!-- Right: Face inspector -->
+  <!-- Right: Face inspector / Dashboard -->
   <div class="face-panel" id="facePanel">
     <div class="face-panel-header">
-      <span>臉部檢視</span>
+      <span id="panelTitle">總覽</span>
       <span class="progress-pill" id="facePill"></span>
     </div>
-    <div id="faceCards">
-      <div style="padding:12px;color:#666;font-size:13px;">選擇照片後顯示臉部資訊</div>
-    </div>
+    <div id="faceCards"></div>
   </div>
 </div>
 
@@ -333,6 +426,8 @@ const S = {
   hoveredFaceIdx: -1,
   busy: false,  // lock to prevent concurrent anchor/clear operations
   hideBoxes: false,  // Ctrl+S toggle to view photo without bbox overlay
+  dashboard: null,  // cached dashboard data for overview
+  expandedDirs: new Set(),  // expanded folder paths in tree view
 };
 
 // ── API ───────────────────────────────────────────────────────────
@@ -355,6 +450,7 @@ function toast(msg, isError = false) {
 async function init() {
   await Promise.all([loadSourceDirs(), loadPersons()]);
   await loadPhotos();
+  await loadDashboard();
   setupEvents();
 }
 
@@ -397,7 +493,7 @@ function renderPersonBar() {
 async function loadPhotos() {
   const source = document.getElementById('sourceFilter').value;
   const unid = document.getElementById('unidFilter').checked;
-  let url = '/api/photos?limit=1000';
+  let url = '/api/photos?limit=10000';
   if (source) url += `&source_dir=${encodeURIComponent(source)}`;
   if (unid) url += '&has_unidentified=1';
   const data = await fetchJSON(url);
@@ -415,31 +511,134 @@ function filterAndRenderPhotos() {
   renderPhotoList();
 }
 
+// ── Photo Tree ────────────────────────────────────────────────────
+function buildPhotoTree(photos) {
+  const root = { children: new Map(), photos: [] };
+  for (const p of photos) {
+    const lastSlash = p.rel_path.lastIndexOf('/');
+    const dirPath = lastSlash >= 0 ? p.rel_path.substring(0, lastSlash) : '';
+    if (!dirPath) { root.photos.push(p); continue; }
+    const parts = dirPath.split('/');
+    let node = root;
+    let path = '';
+    for (const part of parts) {
+      path = path ? path + '/' + part : part;
+      if (!node.children.has(part)) {
+        node.children.set(part, { name: part, path, children: new Map(), photos: [] });
+      }
+      node = node.children.get(part);
+    }
+    node.photos.push(p);
+  }
+  return root;
+}
+
+function getNodeStats(node) {
+  let photoCount = node.photos.length;
+  let faceCount = 0, unidCount = 0;
+  for (const p of node.photos) {
+    faceCount += p.face_count || 0;
+    unidCount += p.unid_count || 0;
+  }
+  for (const child of node.children.values()) {
+    const cs = getNodeStats(child);
+    photoCount += cs.photoCount;
+    faceCount += cs.faceCount;
+    unidCount += cs.unidCount;
+  }
+  return { photoCount, faceCount, unidCount };
+}
+
 function renderPhotoList() {
   const container = document.getElementById('photoListItems');
   container.innerHTML = '';
-  for (const p of S.photos) {
-    const div = document.createElement('div');
-    const isActive = S.currentPhoto && S.currentPhoto.photo_id === p.photo_id;
-    div.className = 'photo-item' + (isActive ? ' active' : '');
-    const fc = p.face_count || 0;
-    const unid = p.unid_count || 0;
-    const anchored = p.anchor_count || 0;
-    let badgeClass, badgeText;
-    if (fc === 0) {
-      badgeClass = 'badge no-face'; badgeText = '0';
-    } else if (unid === 0) {
-      badgeClass = 'badge all-done'; badgeText = `✓${fc}`;
-    } else {
-      badgeClass = 'badge has-unid'; badgeText = `${unid}/${fc}`;
-    }
-    div.innerHTML = `
-      <span class="name" title="${p.rel_path}">${p.filename}</span>
-      <span class="${badgeClass}">${badgeText}</span>
-    `;
-    div.onclick = () => selectPhoto(p);
-    container.appendChild(div);
+  const tree = buildPhotoTree(S.photos);
+  const isSearching = document.getElementById('photoSearch').value.trim().length > 0;
+  renderTreeChildren(container, tree, 0, isSearching);
+}
+
+function renderTreeChildren(container, node, depth, autoExpand) {
+  const dirs = [...node.children.values()].sort((a, b) => a.name.localeCompare(b.name, 'zh-TW'));
+  for (const dir of dirs) renderDirNode(container, dir, depth, autoExpand);
+  for (const p of node.photos) container.appendChild(buildPhotoItem(p, depth));
+}
+
+function renderDirNode(container, node, depth, autoExpand) {
+  const stats = getNodeStats(node);
+
+  // Merge single-child directory chains: "a/b/c" shown as one row
+  // if each intermediate dir has exactly 1 child dir and 0 photos
+  let displayName = node.name;
+  let displayNode = node;
+  const chainPaths = [node.path];
+  while (displayNode.children.size === 1 && displayNode.photos.length === 0) {
+    const only = [...displayNode.children.values()][0];
+    displayName += '/' + only.name;
+    displayNode = only;
+    chainPaths.push(displayNode.path);
   }
+
+  // Expanded if any path in the chain is expanded (or autoExpand/search mode)
+  const isExpanded = autoExpand || chainPaths.some(p => S.expandedDirs.has(p));
+
+  const div = document.createElement('div');
+  div.className = 'dir-node';
+  div.style.paddingLeft = (depth * 14 + 6) + 'px';
+
+  const arrow = isExpanded ? '▼' : '▶';
+  let badgeHtml;
+  if (stats.faceCount === 0) {
+    badgeHtml = `<span class="badge no-face">${stats.photoCount}</span>`;
+  } else if (stats.unidCount === 0) {
+    badgeHtml = `<span class="badge all-done">${stats.photoCount}</span>`;
+  } else {
+    badgeHtml = `<span class="badge has-unid">${stats.unidCount}</span>`;
+  }
+
+  div.innerHTML = `
+    <span class="dir-arrow">${arrow}</span>
+    <span class="dir-name" title="${displayNode.path}">${displayName}</span>
+    ${badgeHtml}
+  `;
+
+  const togglePath = displayNode.path;
+  div.onclick = () => {
+    if (isExpanded) {
+      // Collapse: remove all chain paths
+      for (const p of chainPaths) S.expandedDirs.delete(p);
+    } else {
+      S.expandedDirs.add(togglePath);
+    }
+    renderPhotoList();
+  };
+  container.appendChild(div);
+
+  if (isExpanded) renderTreeChildren(container, displayNode, depth + 1, autoExpand);
+}
+
+function buildPhotoItem(p, depth) {
+  const div = document.createElement('div');
+  const isActive = S.currentPhoto && S.currentPhoto.photo_id === p.photo_id;
+  div.className = 'photo-item' + (isActive ? ' active' : '');
+  div.style.paddingLeft = (depth * 14 + 20) + 'px';
+
+  const fc = p.face_count || 0;
+  const unid = p.unid_count || 0;
+  let badgeClass, badgeText;
+  if (fc === 0) {
+    badgeClass = 'badge no-face'; badgeText = '0';
+  } else if (unid === 0) {
+    badgeClass = 'badge all-done'; badgeText = `\u2713${fc}`;
+  } else {
+    badgeClass = 'badge has-unid'; badgeText = `${unid}/${fc}`;
+  }
+
+  div.innerHTML = `
+    <span class="name" title="${p.rel_path}">${p.filename}</span>
+    <span class="${badgeClass}">${badgeText}</span>
+  `;
+  div.onclick = () => selectPhoto(p);
+  return div;
 }
 
 // ── Select Photo ──────────────────────────────────────────────────
@@ -448,7 +647,27 @@ async function selectPhoto(photo) {
   S.selectedFaceId = null;
   S.expandedFaceId = null;
   S.hoveredFaceIdx = -1;
+
+  // Auto-expand parent directories in tree
+  const lastSlash = photo.rel_path.lastIndexOf('/');
+  if (lastSlash >= 0) {
+    const dirPath = photo.rel_path.substring(0, lastSlash);
+    // Expand all ancestors — but handle merged single-child chains
+    // by expanding each prefix that corresponds to a real tree node
+    const parts = dirPath.split('/');
+    let path = '';
+    for (const part of parts) {
+      path = path ? path + '/' + part : part;
+      S.expandedDirs.add(path);
+    }
+  }
   renderPhotoList();
+
+  // Scroll active photo into view in the tree
+  setTimeout(() => {
+    const active = document.querySelector('.photo-item.active');
+    if (active) active.scrollIntoView({ block: 'nearest' });
+  }, 0);
 
   const canvas = document.getElementById('mainCanvas');
   const loading = document.getElementById('loadingOverlay');
@@ -588,13 +807,118 @@ function drawCanvas() {
   }
 }
 
+// ── Dashboard (right panel default) ───────────────────────────────
+async function loadDashboard() {
+  S.dashboard = await fetchJSON('/api/dashboard');
+  if (!S.currentPhoto) renderDashboard();
+}
+
+function renderDashboard() {
+  const d = S.dashboard;
+  const container = document.getElementById('faceCards');
+  document.getElementById('panelTitle').textContent = '總覽';
+  document.getElementById('facePill').textContent = '';
+
+  if (!d) { container.innerHTML = '<div style="padding:12px;color:#666">載入中...</div>'; return; }
+
+  const pct = d.coverage_pct;
+  let html = '';
+
+  // ── Progress section
+  html += `<div class="dash-section">
+    <div class="dash-title">標註進度</div>
+    <div class="dash-progress">
+      <div class="dash-progress-track"><div class="dash-progress-fill" style="width:${pct}%"></div></div>
+      <div class="dash-pct">${pct}%</div>
+    </div>
+    <div class="dash-stats-grid">
+      <div class="dash-stat"><span class="dash-stat-num">${d.total_faces.toLocaleString()}</span><span class="dash-stat-label">總臉數</span></div>
+      <div class="dash-stat"><span class="dash-stat-num" style="color:#2ecc71">${d.anchored}</span><span class="dash-stat-label">錨定</span></div>
+      <div class="dash-stat"><span class="dash-stat-num" style="color:#f39c12">${d.auto_matched.toLocaleString()}</span><span class="dash-stat-label">自動匹配</span></div>
+      <div class="dash-stat"><span class="dash-stat-num" style="color:#e74c3c">${d.rejected}</span><span class="dash-stat-label">已排除</span></div>
+    </div>
+    <div style="text-align:center;margin-top:6px;font-size:11px;color:#666">
+      ${d.total_photos.toLocaleString()} 張照片 · ${d.unidentified.toLocaleString()} 待辨識
+    </div>
+  </div>`;
+
+  // ── Person ranking
+  if (d.persons.length > 0) {
+    const maxTotal = Math.max(...d.persons.map(p => p.anchor_count + p.auto_count));
+    html += `<div class="dash-section"><div class="dash-title">人物排行 (${d.persons.length})</div>`;
+    for (const p of d.persons) {
+      const total = p.anchor_count + p.auto_count;
+      const barW = maxTotal > 0 ? Math.round(total / maxTotal * 100) : 0;
+      html += `<div class="dash-person-row">
+        <img class="dash-person-img" src="/api/person/${p.person_id}/portrait"
+             onerror="this.style.visibility='hidden'">
+        <span class="dash-person-name">${p.display_name}</span>
+        <span class="dash-person-counts">${p.anchor_count} + ${p.auto_count}</span>
+        <div class="dash-person-bar"><div class="dash-person-bar-fill" style="width:${barW}%"></div></div>
+      </div>`;
+    }
+    html += '</div>';
+  }
+
+  // ── Source distribution
+  if (d.source_dirs.length > 0) {
+    html += `<div class="dash-section"><div class="dash-title">來源分布</div>`;
+    for (const s of d.source_dirs) {
+      html += `<div class="dash-source-row">
+        <span class="dash-source-name">${s.source_dir}</span>
+        <span class="dash-source-count">${s.photo_count}張</span>
+        <div class="dash-source-bar"><div class="dash-source-bar-fill" style="width:${s.coverage_pct}%"></div></div>
+        <span class="dash-source-pct">${s.coverage_pct}%</span>
+      </div>`;
+    }
+    html += '</div>';
+  }
+
+  // ── Top unidentified photos
+  if (d.top_unid_photos.length > 0) {
+    html += `<div class="dash-section"><div class="dash-title">待處理照片 (人臉最多)</div>`;
+    for (const p of d.top_unid_photos) {
+      html += `<div class="dash-photo-row" onclick="jumpToPhoto('${p.photo_id}')">
+        <span class="dash-photo-name" title="${p.source_dir}/${p.filename}">${p.filename}</span>
+        <span class="dash-photo-badge">${p.unid_count}/${p.face_count}</span>
+      </div>`;
+    }
+    html += '</div>';
+  }
+
+  container.innerHTML = html;
+}
+
+function jumpToPhoto(photoId) {
+  const photo = S.allPhotos.find(p => p.photo_id === photoId);
+  if (photo) selectPhoto(photo);
+  else toast('照片不在當前篩選範圍', true);
+}
+
+function backToDashboard() {
+  S.currentPhoto = null;
+  S.currentPhotoData = null;
+  S.currentImage = null;
+  S.selectedFaceId = null;
+  S.expandedFaceId = null;
+  document.getElementById('mainCanvas').style.display = 'none';
+  document.getElementById('noPhoto').style.display = '';
+  document.getElementById('photoProgress').style.display = 'none';
+  renderPhotoList();
+  loadDashboard();
+}
+
 // ── Face Cards (sectioned, compact/expand) ────────────────────────
 function renderFaceCards() {
   const container = document.getElementById('faceCards');
   if (!S.currentPhotoData) {
-    container.innerHTML = '<div style="padding:12px;color:#666">無資料</div>';
+    renderDashboard();
     return;
   }
+
+  // Switch header to face inspector mode
+  document.getElementById('panelTitle').innerHTML =
+    '<span class="back-link" onclick="backToDashboard()">← 總覽</span> 臉部檢視';
 
   const faces = S.currentPhotoData.faces;
   if (faces.length === 0) {
@@ -825,8 +1149,9 @@ async function confirmAnchor(faceId, personId, event) {
     }
     toast(`已錨定 → ${result.display_name} (+${result.new_auto_matches} 自動匹配)`);
 
-    // Re-fetch photo data (faces may have changed due to cascade matching)
+    // Re-fetch photo data + refresh dashboard stats in background
     if (S.currentPhoto) await selectPhoto(S.currentPhoto);
+    loadDashboard();
 
     // After re-fetch, find next unidentified face to auto-advance
     const freshUnid = S.currentPhotoData?.faces.find(f => !f.person_id);
@@ -982,10 +1307,14 @@ function onKeyDown(e) {
       confirmAnchor(face.face_id, face.matches[0].person_id, null);
     }
   } else if (e.key === 'Escape') {
-    S.selectedFaceId = null;
-    S.expandedFaceId = null;
-    drawCanvas();
-    renderFaceCards();
+    if (S.selectedFaceId || S.expandedFaceId) {
+      S.selectedFaceId = null;
+      S.expandedFaceId = null;
+      drawCanvas();
+      renderFaceCards();
+    } else if (S.currentPhoto) {
+      backToDashboard();
+    }
   }
 }
 

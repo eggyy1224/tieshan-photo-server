@@ -18,6 +18,7 @@ from .tools.photo_anchor import photo_anchor
 from .tools.photo_date import photo_date
 from .tools.photo_scene import photo_scene
 from .tools.photo_search import photo_search
+from .web.routes import register_routes
 
 mcp = FastMCP(
     "tieshan-photo",
@@ -25,6 +26,9 @@ mcp = FastMCP(
     host="127.0.0.1",
     port=PHOTO_SERVER_PORT,
 )
+
+# Web UI routes (custom HTTP endpoints, does not affect MCP protocol)
+register_routes(mcp)
 
 
 # ── Phase 1 Tools ────────────────────────────────────────────────────

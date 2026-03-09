@@ -98,6 +98,30 @@ class TestAnchors:
         assert len(anchors) == 1
         assert anchors[0]["face_id"] == fid
 
+    def test_duplicate_anchor_returns_existing_id(self):
+        pid = db.upsert_photo("test/d2.jpg", "test", "d2.jpg")
+        emb = np.random.randn(512).astype(np.float32)
+        fid = db.insert_face(pid, (0.1, 0.2, 0.3, 0.4), 0.9, emb)
+        db.upsert_person("xu_tiancui", "許天催")
+
+        aid1 = db.insert_anchor(fid, "xu_tiancui", "manual", 1.0, "test")
+        aid2 = db.insert_anchor(fid, "xu_tiancui", "manual", 1.0, "test")
+
+        assert aid2 == aid1
+        assert len(db.get_anchors_for_person("xu_tiancui")) == 1
+
+    def test_conflicting_anchor_raises(self):
+        pid = db.upsert_photo("test/d3.jpg", "test", "d3.jpg")
+        emb = np.random.randn(512).astype(np.float32)
+        fid = db.insert_face(pid, (0.1, 0.2, 0.3, 0.4), 0.9, emb)
+        db.upsert_person("xu_tiancui", "許天催")
+        db.upsert_person("xu_tiankui", "許天奎")
+
+        db.insert_anchor(fid, "xu_tiancui", "manual", 1.0, "test")
+
+        with pytest.raises(ValueError):
+            db.insert_anchor(fid, "xu_tiankui", "manual", 1.0, "test")
+
 
 class TestStats:
     def test_empty_stats(self):
@@ -116,3 +140,19 @@ class TestStats:
         assert stats["total_photos"] == 1
         assert stats["scanned"] == 1
         assert stats["face_count"] == 2
+
+    def test_stats_by_person_does_not_multiply_rows(self):
+        db.upsert_person("xu_tiancui", "許天催")
+        pid = db.upsert_photo("test/f.jpg", "test", "f.jpg")
+        emb = np.random.randn(512).astype(np.float32)
+        fid1 = db.insert_face(pid, (0.1, 0.2, 0.3, 0.4), 0.9, emb)
+        fid2 = db.insert_face(pid, (0.5, 0.6, 0.1, 0.1), 0.8, emb)
+        db.update_face_match(fid1, "xu_tiancui", 1.0, "anchor")
+        db.update_face_match(fid2, "xu_tiancui", 0.8, "auto")
+        db.insert_anchor(fid1, "xu_tiancui", "manual", 1.0, "test")
+
+        stats = db.get_stats_by_person()
+        row = next(r for r in stats if r["person_id"] == "xu_tiancui")
+        assert row["photo_count"] == 1
+        assert row["face_count"] == 2
+        assert row["anchor_count"] == 1

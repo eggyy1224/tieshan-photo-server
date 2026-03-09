@@ -110,18 +110,19 @@ def process_photo(photo_path: str | Path, force_rescan: bool = False) -> dict:
     # Register photo in DB
     photo_id = db.upsert_photo(rel_path, source_dir, filename, width=w, height=h)
 
-    # Force rescan: delete existing faces
-    if force_rescan:
-        db.delete_faces_for_photo(photo_id)
-
     # Preprocess and detect
     try:
         img_processed = preprocess(img)
         detected = detect_faces(img_processed)
     except Exception as e:
-        db.mark_failed(photo_id)
+        if not (force_rescan and existing and existing["scan_status"] == "scanned"):
+            db.mark_failed(photo_id)
         log.error("detection failed", photo=rel_path, error=str(e))
         raise
+
+    # Only replace existing data after a successful scan result exists.
+    if force_rescan:
+        db.delete_faces_for_photo(photo_id)
 
     # Store faces
     face_records = []

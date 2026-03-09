@@ -120,11 +120,18 @@ def create_anchors_from_cards(vault_root: Path | None = None) -> int:
             # If only one face in photo, assign directly
             # If multiple faces, we can't auto-assign without more info
             if len(faces) == 1:
-                existing_anchors = db.get_conn().execute(
-                    "SELECT 1 FROM anchors WHERE face_id=? AND person_id=?",
-                    (faces[0]["face_id"], person["person_id"]),
-                ).fetchone()
-                if not existing_anchors:
+                existing_anchor = db.get_anchor_for_face(faces[0]["face_id"])
+                if existing_anchor and existing_anchor["person_id"] != person["person_id"]:
+                    log.warn(
+                        "skip conflicting photo card anchor",
+                        face_id=faces[0]["face_id"],
+                        existing_person=existing_anchor["person_id"],
+                        incoming_person=person["person_id"],
+                        card=card["card_path"],
+                    )
+                    continue
+
+                if not existing_anchor:
                     db.insert_anchor(
                         face_id=faces[0]["face_id"],
                         person_id=person["person_id"],
@@ -133,6 +140,12 @@ def create_anchors_from_cards(vault_root: Path | None = None) -> int:
                         note=f"auto from {card['card_path']}",
                     )
                     anchor_count += 1
+                db.update_face_match(
+                    faces[0]["face_id"],
+                    person["person_id"],
+                    1.0,
+                    "anchor",
+                )
 
     db.get_conn().commit()
     log.info("anchors from photo cards", created=anchor_count)

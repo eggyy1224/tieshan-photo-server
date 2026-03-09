@@ -266,7 +266,12 @@ def get_all_face_embeddings() -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
-def update_face_match(face_id: int, person_id: str, score: float, method: str) -> None:
+def update_face_match(
+    face_id: int,
+    person_id: Optional[str],
+    score: Optional[float],
+    method: Optional[str],
+) -> None:
     conn = get_conn()
     conn.execute(
         "UPDATE faces SET person_id=?, match_score=?, match_method=? WHERE face_id=?",
@@ -351,6 +356,17 @@ def insert_anchor(
     note: Optional[str] = None,
 ) -> int:
     conn = get_conn()
+    existing = conn.execute(
+        "SELECT anchor_id, person_id FROM anchors WHERE face_id=?",
+        (face_id,),
+    ).fetchone()
+    if existing:
+        if existing["person_id"] != person_id:
+            raise ValueError(
+                f"Face {face_id} already anchored to {existing['person_id']}"
+            )
+        return existing["anchor_id"]  # type: ignore[return-value]
+
     cur = conn.execute(
         """INSERT INTO anchors (face_id, person_id, source, confidence, created, note)
            VALUES (?, ?, ?, ?, ?, ?)""",
@@ -364,6 +380,12 @@ def get_anchors_for_person(person_id: str) -> list[dict[str, Any]]:
     conn = get_conn()
     rows = conn.execute("SELECT * FROM anchors WHERE person_id=?", (person_id,)).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_anchor_for_face(face_id: int) -> Optional[dict[str, Any]]:
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM anchors WHERE face_id=?", (face_id,)).fetchone()
+    return dict(row) if row else None
 
 
 # ── Stats ────────────────────────────────────────────────────────────
@@ -407,14 +429,24 @@ def get_stats_by_person() -> list[dict[str, Any]]:
     conn = get_conn()
     rows = conn.execute(
         """SELECT p.person_id, p.display_name,
-                  COUNT(DISTINCT f.photo_id) as photo_count,
-                  COUNT(f.face_id) as face_count,
-                  COUNT(a.anchor_id) as anchor_count
+                  COALESCE(f.photo_count, 0) as photo_count,
+                  COALESCE(f.face_count, 0) as face_count,
+                  COALESCE(a.anchor_count, 0) as anchor_count
            FROM persons p
-           LEFT JOIN faces f ON f.person_id = p.person_id
-           LEFT JOIN anchors a ON a.person_id = p.person_id
-           GROUP BY p.person_id
-           ORDER BY photo_count DESC"""
+           LEFT JOIN (
+               SELECT person_id,
+                      COUNT(DISTINCT photo_id) as photo_count,
+                      COUNT(*) as face_count
+               FROM faces
+               WHERE person_id IS NOT NULL
+               GROUP BY person_id
+           ) f ON f.person_id = p.person_id
+           LEFT JOIN (
+               SELECT person_id, COUNT(*) as anchor_count
+               FROM anchors
+               GROUP BY person_id
+           ) a ON a.person_id = p.person_id
+           ORDER BY photo_count DESC, p.display_name"""
     ).fetchall()
     return [dict(r) for r in rows]
 

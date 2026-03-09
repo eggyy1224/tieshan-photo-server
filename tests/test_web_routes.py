@@ -101,6 +101,19 @@ class TestPhotosAPI:
         r = client.get("/api/photos?has_unidentified=1")
         assert r.json()["total"] == 1
 
+    def test_rejected_faces_are_not_counted_as_unidentified(self, client, seeded_db):
+        fid1, fid2, fid3 = seeded_db["face_ids"]
+        db.update_face_match(fid1, None, None, "rejected")
+        db.insert_anchor(fid2, "xu_tiancui", "manual", 1.0)
+        db.update_face_match(fid2, "xu_tiancui", 1.0, "anchor")
+        db.update_face_match(fid3, "xu_tiankui", 0.45, "auto")
+
+        photos = client.get("/api/photos").json()
+        assert photos["photos"][0]["unid_count"] == 0
+
+        filtered = client.get("/api/photos?has_unidentified=1").json()
+        assert filtered["total"] == 0
+
     def test_limit_and_offset(self, client, seeded_db):
         r = client.get("/api/photos?limit=1&offset=0")
         data = r.json()
@@ -202,6 +215,17 @@ class TestDashboardAPI:
         assert len(data["persons"]) >= 1
         assert data["persons"][0]["person_id"] == "xu_tiancui"
 
+    def test_rejected_faces_not_in_unidentified(self, client, seeded_db):
+        fid1, fid2, fid3 = seeded_db["face_ids"]
+        db.update_face_match(fid1, None, None, "rejected")
+        db.insert_anchor(fid2, "xu_tiancui", "manual", 1.0)
+        db.update_face_match(fid2, "xu_tiancui", 1.0, "anchor")
+        db.update_face_match(fid3, "xu_tiankui", 0.45, "auto")
+
+        data = client.get("/api/dashboard").json()
+        assert data["rejected"] == 1
+        assert data["unidentified"] == 0
+
 
 # ── POST /api/anchor ─────────────────────────────────────────────
 
@@ -223,6 +247,30 @@ class TestAnchorAPI:
                         headers={"content-type": "application/json"})
         assert r.status_code == 400
 
+    def test_duplicate_anchor_returns_existing_record(self, client, seeded_db):
+        fid = seeded_db["face_ids"][0]
+
+        r1 = client.post("/api/anchor", json={"face_id": fid, "person_id": "xu_tiancui"})
+        r2 = client.post("/api/anchor", json={"face_id": fid, "person_id": "xu_tiancui"})
+
+        assert r1.status_code == 200
+        assert r2.status_code == 200
+        assert r2.json()["anchor_id"] == r1.json()["anchor_id"]
+
+        count = db.get_conn().execute(
+            "SELECT COUNT(*) FROM anchors WHERE face_id=?", (fid,)
+        ).fetchone()[0]
+        assert count == 1
+
+    def test_conflicting_anchor_returns_error(self, client, seeded_db):
+        fid = seeded_db["face_ids"][0]
+        client.post("/api/anchor", json={"face_id": fid, "person_id": "xu_tiancui"})
+
+        r = client.post("/api/anchor", json={"face_id": fid, "person_id": "xu_tiankui"})
+
+        assert r.status_code == 400
+        assert r.json()["error"] == "FACE_ALREADY_ANCHORED"
+
 
 # ── DELETE /api/anchor/{face_id} ──────────────────────────────────
 
@@ -242,6 +290,29 @@ class TestDeleteAnchorAPI:
         fid = seeded_db["face_ids"][0]
         r = client.delete(f"/api/anchor/{fid}")
         assert r.status_code == 404
+
+    def test_remove_anchor_clears_auto_matches_in_same_photo(self, client, seeded_db):
+        fid1, fid2, _ = seeded_db["face_ids"]
+        client.post("/api/anchor", json={"face_id": fid1, "person_id": "xu_tiancui"})
+
+        face2 = db.get_conn().execute(
+            "SELECT person_id, match_method FROM faces WHERE face_id=?", (fid2,)
+        ).fetchone()
+        assert face2["match_method"] == "auto"
+
+        r = client.delete(f"/api/anchor/{fid1}")
+        assert r.status_code == 200
+
+        face1 = db.get_conn().execute(
+            "SELECT person_id, match_method FROM faces WHERE face_id=?", (fid1,)
+        ).fetchone()
+        face2 = db.get_conn().execute(
+            "SELECT person_id, match_method FROM faces WHERE face_id=?", (fid2,)
+        ).fetchone()
+        assert face1["person_id"] is None
+        assert face1["match_method"] is None
+        assert face2["person_id"] is None
+        assert face2["match_method"] is None
 
 
 # ── POST /api/face/{face_id}/clear ────────────────────────────────
@@ -301,6 +372,47 @@ class TestUnrejectAPI:
     def test_unreject_nonexistent(self, client):
         r = client.post("/api/face/99999/unreject")
         assert r.status_code == 404
+
+    def test_cannot_unreject_anchor(self, client, seeded_db):
+        fid = seeded_db["face_ids"][0]
+        client.post("/api/anchor", json={"face_id": fid, "person_id": "xu_tiancui"})
+
+        r = client.post(f"/api/face/{fid}/unreject")
+
+        assert r.status_code == 400
+        assert r.json()["error"] == "NOT_REJECTED"
+        face = db.get_conn().execute(
+            "SELECT person_id, match_method FROM faces WHERE face_id=?", (fid,)
+        ).fetchone()
+        assert face["person_id"] == "xu_tiancui"
+        assert face["match_method"] == "anchor"
+
+    def test_cannot_unreject_auto_match(self, client, seeded_db):
+        fid = seeded_db["face_ids"][0]
+        db.update_face_match(fid, "xu_tiancui", 0.45, "auto")
+
+        r = client.post(f"/api/face/{fid}/unreject")
+
+        assert r.status_code == 400
+        assert r.json()["error"] == "NOT_REJECTED"
+        face = db.get_conn().execute(
+            "SELECT person_id, match_method FROM faces WHERE face_id=?", (fid,)
+        ).fetchone()
+        assert face["person_id"] == "xu_tiancui"
+        assert face["match_method"] == "auto"
+
+    def test_cannot_unreject_unmatched_face(self, client, seeded_db):
+        fid = seeded_db["face_ids"][0]
+
+        r = client.post(f"/api/face/{fid}/unreject")
+
+        assert r.status_code == 400
+        assert r.json()["error"] == "NOT_REJECTED"
+        face = db.get_conn().execute(
+            "SELECT person_id, match_method FROM faces WHERE face_id=?", (fid,)
+        ).fetchone()
+        assert face["person_id"] is None
+        assert face["match_method"] is None
 
 
 # ── Rejected face persistence across cascade ──────────────────────

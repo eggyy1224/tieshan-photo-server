@@ -21,8 +21,11 @@ import struct
 from .. import db
 from ..config import PROJECT_ROOT
 from ..matching import match_face
-from ..tools.photo_anchor import photo_anchor
+from ..tools.photo_anchor import photo_anchor, rematch_faces
 from .ui import get_html
+
+
+_UNIDENTIFIED_SQL = "person_id IS NULL AND COALESCE(match_method,'') != 'rejected'"
 
 
 def _to_float(v) -> float:
@@ -82,7 +85,8 @@ def register_routes(mcp) -> None:  # noqa: ANN001 (FastMCP type)
         has_unidentified = request.query_params.get("has_unidentified", "")
         if has_unidentified == "1":
             conditions.append(
-                "p.photo_id IN (SELECT DISTINCT photo_id FROM faces WHERE person_id IS NULL)"
+                "p.photo_id IN (SELECT DISTINCT photo_id FROM faces "
+                f"WHERE {_UNIDENTIFIED_SQL})"
             )
 
         where = " AND ".join(conditions)
@@ -97,7 +101,7 @@ def register_routes(mcp) -> None:  # noqa: ANN001 (FastMCP type)
                 FROM photos p
                 LEFT JOIN (
                     SELECT photo_id, COUNT(*) as unid_count
-                    FROM faces WHERE person_id IS NULL
+                    FROM faces WHERE {_UNIDENTIFIED_SQL}
                     GROUP BY photo_id
                 ) u ON u.photo_id = p.photo_id
                 LEFT JOIN (
@@ -352,6 +356,11 @@ def register_routes(mcp) -> None:  # noqa: ANN001 (FastMCP type)
             )
 
         person_id = anchor["person_id"]
+        face = conn.execute(
+            "SELECT photo_id FROM faces WHERE face_id=?", (face_id,)
+        ).fetchone()
+        if not face:
+            return JSONResponse({"error": "FACE_NOT_FOUND"}, status_code=404)
 
         # Delete anchor
         conn.execute("DELETE FROM anchors WHERE face_id=?", (face_id,))
@@ -362,6 +371,7 @@ def register_routes(mcp) -> None:  # noqa: ANN001 (FastMCP type)
             (face_id,),
         )
         conn.commit()
+        rematch_faces(photo_id=face["photo_id"], reset_auto_matches=True)
 
         person = db.get_person(person_id)
         display_name = person["display_name"] if person else person_id
@@ -416,8 +426,17 @@ def register_routes(mcp) -> None:  # noqa: ANN001 (FastMCP type)
         if not face:
             return JSONResponse({"error": "FACE_NOT_FOUND"}, status_code=404)
 
+        if face["match_method"] != "rejected":
+            return JSONResponse(
+                {
+                    "error": "NOT_REJECTED",
+                    "message": "Only rejected faces can be unrejected",
+                },
+                status_code=400,
+            )
+
         conn.execute(
-            "UPDATE faces SET match_method=NULL WHERE face_id=?",
+            "UPDATE faces SET person_id=NULL, match_score=NULL, match_method=NULL WHERE face_id=?",
             (face_id,),
         )
         conn.commit()

@@ -71,18 +71,18 @@ def register_routes(mcp) -> None:  # noqa: ANN001 (FastMCP type)
     @mcp.custom_route("/api/photos", methods=["GET"])
     async def api_photos(request: Request) -> JSONResponse:
         conn = db.get_conn()
-        conditions: list[str] = ["scan_status='scanned'"]
+        conditions: list[str] = ["p.scan_status='scanned'"]
         params: list[Any] = []
 
         source_dir = request.query_params.get("source_dir", "")
         if source_dir:
-            conditions.append("source_dir=?")
+            conditions.append("p.source_dir=?")
             params.append(source_dir)
 
         has_unidentified = request.query_params.get("has_unidentified", "")
         if has_unidentified == "1":
             conditions.append(
-                "photo_id IN (SELECT DISTINCT photo_id FROM faces WHERE person_id IS NULL)"
+                "p.photo_id IN (SELECT DISTINCT photo_id FROM faces WHERE person_id IS NULL)"
             )
 
         where = " AND ".join(conditions)
@@ -90,17 +90,29 @@ def register_routes(mcp) -> None:  # noqa: ANN001 (FastMCP type)
         offset = int(request.query_params.get("offset", "0"))
 
         rows = conn.execute(
-            f"""SELECT photo_id, rel_path, source_dir, filename,
-                       width, height, face_count
-                FROM photos
+            f"""SELECT p.photo_id, p.rel_path, p.source_dir, p.filename,
+                       p.width, p.height, p.face_count,
+                       COALESCE(u.unid_count, 0) as unid_count,
+                       COALESCE(a.anchor_count, 0) as anchor_count
+                FROM photos p
+                LEFT JOIN (
+                    SELECT photo_id, COUNT(*) as unid_count
+                    FROM faces WHERE person_id IS NULL
+                    GROUP BY photo_id
+                ) u ON u.photo_id = p.photo_id
+                LEFT JOIN (
+                    SELECT f.photo_id, COUNT(*) as anchor_count
+                    FROM faces f JOIN anchors a ON a.face_id = f.face_id
+                    GROUP BY f.photo_id
+                ) a ON a.photo_id = p.photo_id
                 WHERE {where}
-                ORDER BY source_dir, filename
+                ORDER BY p.source_dir, p.filename
                 LIMIT ? OFFSET ?""",
             params + [limit, offset],
         ).fetchall()
 
         total = conn.execute(
-            f"SELECT COUNT(*) FROM photos WHERE {where}", params
+            f"SELECT COUNT(*) FROM photos p WHERE {where}", params
         ).fetchone()[0]
 
         return JSONResponse({
@@ -165,7 +177,10 @@ def register_routes(mcp) -> None:  # noqa: ANN001 (FastMCP type)
             return JSONResponse({"error": "FILE_NOT_FOUND"}, status_code=404)
 
         max_dim = int(request.query_params.get("max_dim", "0"))
-        img = ImageOps.exif_transpose(Image.open(abs_path))
+        try:
+            img = ImageOps.exif_transpose(Image.open(abs_path))
+        except Exception:
+            img = Image.open(abs_path)
 
         if max_dim and max(img.size) > max_dim:
             img.thumbnail((max_dim, max_dim), Image.LANCZOS)
@@ -192,7 +207,10 @@ def register_routes(mcp) -> None:  # noqa: ANN001 (FastMCP type)
         if not abs_path:
             return JSONResponse({"error": "FILE_NOT_FOUND"}, status_code=404)
 
-        img = ImageOps.exif_transpose(Image.open(abs_path))
+        try:
+            img = ImageOps.exif_transpose(Image.open(abs_path))
+        except Exception:
+            img = Image.open(abs_path)
         w, h = img.size
 
         # bbox is normalized [0,1], may be stored as bytes in older records
@@ -268,7 +286,10 @@ def register_routes(mcp) -> None:  # noqa: ANN001 (FastMCP type)
         if not abs_path:
             return JSONResponse({"error": "FILE_NOT_FOUND"}, status_code=404)
 
-        img = ImageOps.exif_transpose(Image.open(abs_path))
+        try:
+            img = ImageOps.exif_transpose(Image.open(abs_path))
+        except Exception:
+            img = Image.open(abs_path)
         w, h = img.size
         bx = _to_float(row["bbox_x"])
         by = _to_float(row["bbox_y"])
@@ -311,6 +332,73 @@ def register_routes(mcp) -> None:  # noqa: ANN001 (FastMCP type)
         if "error" in result:
             return JSONResponse(result, status_code=400)
         return JSONResponse(result)
+
+    # ── DELETE /api/anchor — Remove anchor ─────────────────────────
+
+    @mcp.custom_route("/api/anchor/{face_id}", methods=["DELETE"])
+    async def api_delete_anchor(request: Request) -> JSONResponse:
+        face_id = int(request.path_params["face_id"])
+        conn = db.get_conn()
+
+        # Check anchor exists
+        anchor = conn.execute(
+            "SELECT anchor_id, person_id FROM anchors WHERE face_id=?", (face_id,)
+        ).fetchone()
+        if not anchor:
+            return JSONResponse(
+                {"error": "NO_ANCHOR", "message": f"No anchor for face {face_id}"},
+                status_code=404,
+            )
+
+        person_id = anchor["person_id"]
+
+        # Delete anchor
+        conn.execute("DELETE FROM anchors WHERE face_id=?", (face_id,))
+
+        # Clear face assignment (only if it was an anchor, not auto)
+        conn.execute(
+            "UPDATE faces SET person_id=NULL, match_score=NULL, match_method=NULL WHERE face_id=? AND match_method='anchor'",
+            (face_id,),
+        )
+        conn.commit()
+
+        person = db.get_person(person_id)
+        display_name = person["display_name"] if person else person_id
+
+        return JSONResponse({
+            "removed": True,
+            "face_id": face_id,
+            "person_id": person_id,
+            "display_name": display_name,
+        })
+
+    # ── POST /api/face/{face_id}/clear — Clear auto-match ──────────
+
+    @mcp.custom_route("/api/face/{face_id}/clear", methods=["POST"])
+    async def api_clear_match(request: Request) -> JSONResponse:
+        face_id = int(request.path_params["face_id"])
+        conn = db.get_conn()
+
+        face = conn.execute(
+            "SELECT face_id, person_id, match_method FROM faces WHERE face_id=?",
+            (face_id,),
+        ).fetchone()
+        if not face:
+            return JSONResponse({"error": "FACE_NOT_FOUND"}, status_code=404)
+
+        if face["match_method"] == "anchor":
+            return JSONResponse(
+                {"error": "IS_ANCHOR", "message": "Use anchor delete to remove anchored matches"},
+                status_code=400,
+            )
+
+        conn.execute(
+            "UPDATE faces SET person_id=NULL, match_score=NULL, match_method=NULL WHERE face_id=?",
+            (face_id,),
+        )
+        conn.commit()
+
+        return JSONResponse({"cleared": True, "face_id": face_id})
 
     # ── GET /api/source_dirs — Available source directories ─────────
 

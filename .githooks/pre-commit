@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# face.db light backup on every commit
+_backup_script="$(cd "$(dirname "$0")/../../.." && pwd)/tools/backup_facedb.sh"
+if [ -f "$_backup_script" ]; then
+  bash "$_backup_script" || echo "WARNING: face.db backup failed (non-blocking)" >&2
+fi

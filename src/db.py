@@ -109,6 +109,11 @@ CREATE TABLE IF NOT EXISTS rejected_matches (
 );
 CREATE INDEX IF NOT EXISTS idx_rejected_face ON rejected_matches(face_id);
 CREATE INDEX IF NOT EXISTS idx_rejected_photo ON rejected_matches(photo_id);
+
+CREATE TABLE IF NOT EXISTS photo_stars (
+    photo_id TEXT PRIMARY KEY REFERENCES photos(photo_id),
+    created  TEXT NOT NULL
+);
 """
 
 _MIGRATIONS = [
@@ -492,6 +497,42 @@ def get_rejected_persons_for_photo(photo_id: str) -> list[str]:
         (photo_id,),
     ).fetchall()
     return [r["person_id"] for r in rows]
+
+
+# ── Photo Stars CRUD ────────────────────────────────────────────────
+
+def star_photo(photo_id: str) -> bool:
+    """Add star to photo. Returns True if newly starred, False if already starred."""
+    conn = get_conn()
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO photo_stars (photo_id, created) VALUES (?, ?)",
+        (photo_id, time.strftime("%Y-%m-%dT%H:%M:%S")),
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def unstar_photo(photo_id: str) -> bool:
+    """Remove star from photo. Returns True if removed, False if wasn't starred."""
+    conn = get_conn()
+    cur = conn.execute("DELETE FROM photo_stars WHERE photo_id=?", (photo_id,))
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def is_starred(photo_id: str) -> bool:
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT 1 FROM photo_stars WHERE photo_id=?", (photo_id,)
+    ).fetchone()
+    return row is not None
+
+
+def get_starred_photo_ids() -> set[str]:
+    """Return set of all starred photo_ids."""
+    conn = get_conn()
+    rows = conn.execute("SELECT photo_id FROM photo_stars").fetchall()
+    return {r["photo_id"] for r in rows}
 
 
 # ── Stats ────────────────────────────────────────────────────────────

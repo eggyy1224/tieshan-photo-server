@@ -100,7 +100,8 @@ def register_routes(mcp) -> None:  # noqa: ANN001 (FastMCP type)
             f"""SELECT p.photo_id, p.rel_path, p.source_dir, p.filename,
                        p.width, p.height, p.face_count,
                        COALESCE(u.unid_count, 0) as unid_count,
-                       COALESCE(a.anchor_count, 0) as anchor_count
+                       COALESCE(a.anchor_count, 0) as anchor_count,
+                       CASE WHEN ps.photo_id IS NOT NULL THEN 1 ELSE 0 END as starred
                 FROM photos p
                 LEFT JOIN (
                     SELECT photo_id, COUNT(*) as unid_count
@@ -112,6 +113,7 @@ def register_routes(mcp) -> None:  # noqa: ANN001 (FastMCP type)
                     FROM faces f JOIN anchors a ON a.face_id = f.face_id
                     GROUP BY f.photo_id
                 ) a ON a.photo_id = p.photo_id
+                LEFT JOIN photo_stars ps ON ps.photo_id = p.photo_id
                 WHERE {where}
                 ORDER BY p.source_dir, p.filename
                 LIMIT ? OFFSET ?""",
@@ -171,6 +173,7 @@ def register_routes(mcp) -> None:  # noqa: ANN001 (FastMCP type)
             "width": photo["width"],
             "height": photo["height"],
             "face_count": photo["face_count"],
+            "starred": db.is_starred(photo_id),
             "faces": faces,
         })
 
@@ -704,6 +707,51 @@ def register_routes(mcp) -> None:  # noqa: ANN001 (FastMCP type)
         final_name = save_person(str(person_id), **kwargs)
 
         return JSONResponse({"ok": True, "person_id": person_id, "display_name": final_name})
+
+    # ── POST /api/photo/{photo_id}/star — Set star (idempotent) ────
+
+    @mcp.custom_route("/api/photo/{photo_id}/star", methods=["POST"])
+    async def api_set_star(request: Request) -> JSONResponse:
+        photo_id = request.path_params["photo_id"]
+        photo = db.get_photo(photo_id)
+        if not photo:
+            return JSONResponse({"error": "NOT_FOUND"}, status_code=404)
+
+        # Accept explicit target state for idempotency
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+
+        if body is None or body == {}:
+            # No body: legacy toggle
+            want_starred = not db.is_starred(photo_id)
+        elif isinstance(body, dict) and "starred" in body:
+            val = body["starred"]
+            if not isinstance(val, bool):
+                return JSONResponse(
+                    {"error": "INVALID_PAYLOAD", "message": "starred must be a boolean (true/false)"},
+                    status_code=400,
+                )
+            want_starred = val
+        else:
+            return JSONResponse(
+                {"error": "INVALID_PAYLOAD", "message": "Expected {\"starred\": true/false} or empty body"},
+                status_code=400,
+            )
+
+        if want_starred:
+            db.star_photo(photo_id)
+        else:
+            db.unstar_photo(photo_id)
+        return JSONResponse({"starred": want_starred, "photo_id": photo_id})
+
+    # ── GET /api/stars — List all starred photo ids ───────────────
+
+    @mcp.custom_route("/api/stars", methods=["GET"])
+    async def api_stars(request: Request) -> JSONResponse:
+        starred = db.get_starred_photo_ids()
+        return JSONResponse({"starred": sorted(starred)})
 
     # ── POST /api/compare — Compare ref photo vs target photo faces ──
 

@@ -357,6 +357,28 @@ body {
 }
 .toast.show { opacity: 1; }
 .toast.error { background: #c0392b; }
+
+/* ── Star / Favorite ────────────────────────────────────────── */
+.star-btn {
+  cursor: pointer; font-size: 14px; line-height: 1;
+  background: none; border: none; padding: 0 2px;
+  flex-shrink: 0; user-select: none;
+}
+.star-btn.off { color: #555; }
+.star-btn.on  { color: #f1c40f; }
+.star-btn:hover { transform: scale(1.2); }
+.star-filter {
+  padding: 3px 10px; border-radius: 4px; cursor: pointer;
+  background: #0f3460; border: 1px solid #444; color: #e0e0e0;
+  font-size: 13px; user-select: none;
+}
+.star-filter.active { background: #b7950b; color: #fff; border-color: #f1c40f; }
+.photo-title-star {
+  cursor: pointer; font-size: 18px; margin-left: 6px;
+  user-select: none;
+}
+.photo-title-star.off { color: #555; }
+.photo-title-star.on  { color: #f1c40f; }
 </style>
 </head>
 <body>
@@ -370,6 +392,7 @@ body {
   <label>
     <input type="checkbox" id="unidFilter"> 只看未辨識
   </label>
+  <button class="star-filter" id="starFilter" onclick="toggleStarFilter()">⭐ 星標</button>
   <span class="photo-progress" id="photoProgress"></span>
   <div class="stats" id="statsBar">載入中...</div>
 </div>
@@ -428,6 +451,8 @@ const S = {
   hideBoxes: false,  // Ctrl+S toggle to view photo without bbox overlay
   dashboard: null,  // cached dashboard data for overview
   expandedDirs: new Set(),  // expanded folder paths in tree view
+  starredSet: new Set(),  // starred photo_ids
+  starFilterActive: false,  // whether star filter is on
 };
 
 // ── API ───────────────────────────────────────────────────────────
@@ -448,10 +473,19 @@ function toast(msg, isError = false) {
 
 // ── Init ──────────────────────────────────────────────────────────
 async function init() {
-  await Promise.all([loadSourceDirs(), loadPersons()]);
+  await Promise.all([loadSourceDirs(), loadPersons(), loadStars()]);
   await loadPhotos();
   await loadDashboard();
   setupEvents();
+}
+
+async function loadStars() {
+  try {
+    const data = await fetchJSON('/api/stars');
+    S.starredSet = new Set(data.starred);
+  } catch (e) {
+    console.warn('Failed to load stars, continuing without:', e);
+  }
 }
 
 async function loadSourceDirs() {
@@ -499,16 +533,73 @@ async function loadPhotos() {
   const data = await fetchJSON(url);
   S.allPhotos = data.photos;
   S.photos = data.photos;
+  // Merge star data from photos response into starredSet (repairs stale/failed loadStars)
+  for (const p of data.photos) {
+    if (p.starred) S.starredSet.add(p.photo_id); else S.starredSet.delete(p.photo_id);
+  }
   document.getElementById('statsBar').textContent = `${data.total} 張照片`;
   filterAndRenderPhotos();
 }
 
 function filterAndRenderPhotos() {
   const q = document.getElementById('photoSearch').value.toLowerCase();
-  S.photos = q
-    ? S.allPhotos.filter(p => p.filename.toLowerCase().includes(q))
-    : S.allPhotos;
+  let filtered = S.allPhotos;
+  if (q) filtered = filtered.filter(p => p.filename.toLowerCase().includes(q));
+  if (S.starFilterActive) filtered = filtered.filter(p => S.starredSet.has(p.photo_id));
+  S.photos = filtered;
   renderPhotoList();
+}
+
+function toggleStarFilter() {
+  S.starFilterActive = !S.starFilterActive;
+  document.getElementById('starFilter').classList.toggle('active', S.starFilterActive);
+  filterAndRenderPhotos();
+}
+
+const _starInFlight = new Set();  // photo_ids with pending toggle requests
+async function toggleStar(photoId, event) {
+  if (event) { event.stopPropagation(); event.preventDefault(); }
+  if (_starInFlight.has(photoId)) return;  // drop rapid duplicate clicks
+  _starInFlight.add(photoId);
+
+  // Optimistic UI: flip immediately so display is always consistent
+  const wasStarred = S.starredSet.has(photoId);
+  if (wasStarred) S.starredSet.delete(photoId); else S.starredSet.add(photoId);
+  const p = S.allPhotos.find(x => x.photo_id === photoId);
+  if (p) p.starred = wasStarred ? 0 : 1;
+  filterAndRenderPhotos();
+  if (S.currentPhoto && S.currentPhoto.photo_id === photoId) updatePhotoTitleStar();
+
+  const wantStarred = !wasStarred;
+  const rollback = () => {
+    if (wasStarred) S.starredSet.add(photoId); else S.starredSet.delete(photoId);
+    if (p) p.starred = wasStarred ? 1 : 0;
+    filterAndRenderPhotos();
+    if (S.currentPhoto && S.currentPhoto.photo_id === photoId) updatePhotoTitleStar();
+  };
+  try {
+    const resp = await fetch(`/api/photo/${photoId}/star`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ starred: wantStarred }),
+    });
+    const result = await resp.json();
+    if (!resp.ok || result.error) {
+      rollback();
+      toast(`星標操作失敗: ${result.message || result.error || resp.statusText}`, true);
+      return;
+    }
+    // Reconcile with server truth
+    if (result.starred) S.starredSet.add(photoId); else S.starredSet.delete(photoId);
+    if (p) p.starred = result.starred ? 1 : 0;
+    filterAndRenderPhotos();
+    if (S.currentPhoto && S.currentPhoto.photo_id === photoId) updatePhotoTitleStar();
+  } catch (err) {
+    rollback();
+    toast('星標操作失敗: ' + err.message, true);
+  } finally {
+    _starInFlight.delete(photoId);
+  }
 }
 
 // ── Photo Tree ────────────────────────────────────────────────────
@@ -633,7 +724,9 @@ function buildPhotoItem(p, depth) {
     badgeClass = 'badge has-unid'; badgeText = `${unid}/${fc}`;
   }
 
+  const isStar = S.starredSet.has(p.photo_id);
   div.innerHTML = `
+    <button class="star-btn ${isStar ? 'on' : 'off'}" onclick="toggleStar('${p.photo_id}', event)">${isStar ? '★' : '☆'}</button>
     <span class="name" title="${p.rel_path}">${p.filename}</span>
     <span class="${badgeClass}">${badgeText}</span>
   `;
@@ -683,6 +776,13 @@ async function selectPhoto(photo) {
   S.currentPhotoData = photoData;
   S.currentImage = img;
 
+  // Sync star state from server (handles cross-tab changes)
+  const serverStarred = !!photoData.starred;
+  const cachedStarred = S.starredSet.has(photo.photo_id);
+  if (serverStarred) S.starredSet.add(photo.photo_id);
+  else S.starredSet.delete(photo.photo_id);
+  if (serverStarred !== cachedStarred) filterAndRenderPhotos();
+
   loading.style.display = 'none';
   canvas.style.display = 'block';
 
@@ -720,11 +820,21 @@ function updatePhotoProgress() {
   const unid = total - anchored - autoM;
 
   pp.style.display = 'inline';
-  pp.innerHTML = `<span class="done">${anchored} 錨定</span> · <span class="pending">${unid} 待辨識</span>`;
+  const photoId = S.currentPhoto?.photo_id;
+  const isStar = photoId && S.starredSet.has(photoId);
+  const starHtml = photoId
+    ? `<span class="photo-title-star ${isStar ? 'on' : 'off'}" onclick="toggleStar('${photoId}', event)">${isStar ? '★' : '☆'}</span>`
+    : '';
+  pp.innerHTML = `${starHtml}<span class="done">${anchored} 錨定</span> · <span class="pending">${unid} 待辨識</span>`;
 
   pill.innerHTML = unid > 0
     ? `<span style="color:#e67e22">${unid}</span>/${total}`
     : `<span style="color:#2ecc71">✓</span> ${total}`;
+}
+
+function updatePhotoTitleStar() {
+  // Re-render the photo progress bar which includes the star
+  updatePhotoProgress();
 }
 
 function loadImage(src) {

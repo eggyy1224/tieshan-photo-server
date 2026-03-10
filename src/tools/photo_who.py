@@ -41,7 +41,9 @@ async def photo_who(photo_path: str, force_rescan: bool = False) -> dict:
         matches = []
         if face_row:
             emb = db.blob_to_embedding(face_row["embedding"])
-            matches = match_face(emb, top_k=3)
+            rejected = db.get_rejected_persons_for_face(face_id)
+            exclude = set(rejected) if rejected else None
+            matches = match_face(emb, top_k=3, exclude_persons=exclude)
 
         faces_with_matches.append({
             "face_id": face_id,

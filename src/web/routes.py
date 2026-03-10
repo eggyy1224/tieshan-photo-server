@@ -139,7 +139,10 @@ def register_routes(mcp) -> None:  # noqa: ANN001 (FastMCP type)
         faces = []
         for f in faces_raw:
             emb = db.blob_to_embedding(f["embedding"])
-            matches = match_face(emb, top_k=3)
+            # Exclude rejected persons from candidate list
+            rejected = db.get_rejected_persons_for_face(f["face_id"])
+            exclude = set(rejected) if rejected else None
+            matches = match_face(emb, top_k=3, exclude_persons=exclude)
             faces.append({
                 "face_id": f["face_id"],
                 "bbox": [_to_float(f["bbox_x"]), _to_float(f["bbox_y"]),
@@ -151,6 +154,7 @@ def register_routes(mcp) -> None:  # noqa: ANN001 (FastMCP type)
                 "match_score": round(f["match_score"], 4) if f["match_score"] else None,
                 "match_method": f["match_method"],
                 "matches": matches,
+                "rejected_persons": rejected or [],
             })
         # Note: embedding blob excluded from response
         # Sort by det_score descending
@@ -403,6 +407,11 @@ def register_routes(mcp) -> None:  # noqa: ANN001 (FastMCP type)
                 status_code=400,
             )
 
+        # Save rejection pair (negative feedback) before clearing
+        rejected_person_id = face["person_id"]
+        if rejected_person_id:
+            db.insert_rejected_match(face_id, rejected_person_id)
+
         # Mark as 'rejected' so cascade re-matching skips this face
         conn.execute(
             "UPDATE faces SET person_id=NULL, match_score=NULL, match_method='rejected' WHERE face_id=?",
@@ -410,7 +419,11 @@ def register_routes(mcp) -> None:  # noqa: ANN001 (FastMCP type)
         )
         conn.commit()
 
-        return JSONResponse({"cleared": True, "face_id": face_id})
+        return JSONResponse({
+            "cleared": True,
+            "face_id": face_id,
+            "rejected_person": rejected_person_id,
+        })
 
     # ── POST /api/face/{face_id}/unreject — Undo rejection ────────
 
@@ -420,7 +433,7 @@ def register_routes(mcp) -> None:  # noqa: ANN001 (FastMCP type)
         conn = db.get_conn()
 
         face = conn.execute(
-            "SELECT face_id, match_method FROM faces WHERE face_id=?",
+            "SELECT face_id, photo_id, match_method FROM faces WHERE face_id=?",
             (face_id,),
         ).fetchone()
         if not face:
@@ -435,13 +448,27 @@ def register_routes(mcp) -> None:  # noqa: ANN001 (FastMCP type)
                 status_code=400,
             )
 
+        # Clear rejection records for this specific face only
+        cleared_count = db.delete_rejected_matches_for_face(face_id)
+
         conn.execute(
             "UPDATE faces SET person_id=NULL, match_score=NULL, match_method=NULL WHERE face_id=?",
             (face_id,),
         )
         conn.commit()
 
-        return JSONResponse({"unrejected": True, "face_id": face_id})
+        return JSONResponse({
+            "unrejected": True,
+            "face_id": face_id,
+            "rejections_cleared": cleared_count,
+        })
+
+    # ── POST /api/rematch — Global rematch ──────────────────────────
+
+    @mcp.custom_route("/api/rematch", methods=["POST"])
+    async def api_rematch(request: Request) -> JSONResponse:
+        new_matches = rematch_faces(photo_id=None, reset_auto_matches=True)
+        return JSONResponse({"new_auto_matches": new_matches})
 
     # ── GET /api/source_dirs — Available source directories ─────────
 
@@ -522,6 +549,11 @@ def register_routes(mcp) -> None:  # noqa: ANN001 (FastMCP type)
                LIMIT 10"""
         ).fetchall()
 
+        # Negative feedback stats
+        rejection_pairs = conn.execute(
+            "SELECT COUNT(*) FROM rejected_matches"
+        ).fetchone()[0]
+
         return JSONResponse({
             "total_photos": total_photos,
             "total_faces": total_faces,
@@ -529,6 +561,7 @@ def register_routes(mcp) -> None:  # noqa: ANN001 (FastMCP type)
             "auto_matched": auto_matched,
             "rejected": rejected,
             "unidentified": unidentified,
+            "rejection_pairs": rejection_pairs,
             "coverage_pct": round(identified / total_faces * 100, 1) if total_faces > 0 else 0,
             "persons": [dict(r) for r in person_rows],
             "source_dirs": [

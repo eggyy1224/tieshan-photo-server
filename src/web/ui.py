@@ -791,7 +791,7 @@ function drawCanvas() {
 
     // Label background
     const pname = f.person_id ? (S.personsMap[f.person_id]?.display_name || '') : '';
-    const label = pname ? `#${i+1} ${pname}` : `#${i+1}`;
+    const label = pname ? `${f.face_id} ${pname}` : `${f.face_id}`;
     ctx.font = `bold ${baseFontSize}px sans-serif`;
     const tm = ctx.measureText(label);
     const lh = baseFontSize + 4;
@@ -838,7 +838,13 @@ function renderDashboard() {
       <div class="dash-stat"><span class="dash-stat-num" style="color:#e74c3c">${d.rejected}</span><span class="dash-stat-label">已排除</span></div>
     </div>
     <div style="text-align:center;margin-top:6px;font-size:11px;color:#666">
-      ${d.total_photos.toLocaleString()} 張照片 · ${d.unidentified.toLocaleString()} 待辨識
+      ${d.total_photos.toLocaleString()} 張照片 · ${d.unidentified.toLocaleString()} 待辨識${d.rejection_pairs ? ` · ${d.rejection_pairs} 筆負回饋` : ''}
+    </div>
+    <div style="text-align:center;margin-top:8px">
+      <button onclick="globalRematch()" style="
+        padding:6px 16px;border-radius:4px;border:none;cursor:pointer;
+        background:#0f3460;color:#7dd3fc;font-size:12px;font-weight:600;
+      ">全域重新匹配</button>
     </div>
   </div>`;
 
@@ -1000,7 +1006,7 @@ function buildFaceEntry(f, allFaces) {
   }
 
   row.innerHTML = `
-    <span class="row-label">#${idx+1}</span>
+    <span class="row-label">${f.face_id}</span>
     <img class="face-crop-sm ${cropClass}" src="/api/face/${f.face_id}/crop" alt="">
     <span class="row-name ${nameClass}">${personName}${matchHint}</span>
     <span class="row-actions">${actionsHtml}</span>
@@ -1057,6 +1063,14 @@ function buildExpandedCard(f, idx, isAnchored, isAutoMatch, personName) {
     matchesHtml += '</div>';
   }
 
+  // Rejected persons indicator
+  let rejectedHtml = '';
+  if (f.rejected_persons && f.rejected_persons.length > 0) {
+    const names = f.rejected_persons.map(pid => S.personsMap[pid]?.display_name || pid).join('、');
+    rejectedHtml = `<div style="font-size:10px;color:#e74c3c;padding:4px 8px;background:rgba(231,76,60,0.1);border-radius:4px;margin-top:4px">
+      排除：${names}</div>`;
+  }
+
   // Manual assign
   let manualHtml = '';
   if (!isAnchored) {
@@ -1082,6 +1096,7 @@ function buildExpandedCard(f, idx, isAnchored, isAutoMatch, personName) {
       </div>
     </div>
     ${matchesHtml}
+    ${rejectedHtml}
     ${manualHtml}
   `;
 
@@ -1217,6 +1232,20 @@ async function clearAutoMatch(faceId, event) {
     const result = await resp.json();
     if (result.error) { toast(`錯誤: ${result.message || result.error}`, true); return; }
     toast('已清除自動匹配');
+    if (S.currentPhoto) await selectPhoto(S.currentPhoto);
+  } catch (err) { toast(`錯誤: ${err.message}`, true); }
+  finally { clearBusy(); }
+}
+
+async function globalRematch() {
+  if (S.busy) return;
+  setBusy('全域重新匹配中...');
+  try {
+    const resp = await fetch('/api/rematch', { method: 'POST' });
+    const result = await resp.json();
+    toast(`完成：${result.new_auto_matches} 筆新匹配`);
+    await loadDashboard();
+    await loadPhotos();
     if (S.currentPhoto) await selectPhoto(S.currentPhoto);
   } catch (err) { toast(`錯誤: ${err.message}`, true); }
   finally { clearBusy(); }

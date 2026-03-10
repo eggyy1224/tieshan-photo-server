@@ -44,7 +44,10 @@ def rematch_faces(photo_id: str | None = None, reset_auto_matches: bool = False)
     new_matches = 0
     for row in rows:
         emb = db.blob_to_embedding(row["embedding"])
-        matches = match_face(emb, top_k=1)
+        # Load rejection list for this face to exclude false positives
+        rejected = db.get_rejected_persons_for_face(row["face_id"])
+        exclude = set(rejected) if rejected else None
+        matches = match_face(emb, top_k=1, exclude_persons=exclude)
         if matches and matches[0]["confidence"] in ("HIGH", "MEDIUM"):
             db.update_face_match(
                 row["face_id"],

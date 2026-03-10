@@ -417,6 +417,148 @@ class TestUnrejectAPI:
 
 # ── Rejected face persistence across cascade ──────────────────────
 
+class TestNegativeFeedback:
+    """Tests for the negative feedback (rejected_matches) system."""
+
+    def test_clear_saves_rejection_pair(self, client, seeded_db):
+        """Clearing an auto-match should record a rejection pair."""
+        fid = seeded_db["face_ids"][0]
+        db.update_face_match(fid, "xu_tiancui", 0.45, "auto")
+
+        r = client.post(f"/api/face/{fid}/clear")
+        assert r.status_code == 200
+        assert r.json()["rejected_person"] == "xu_tiancui"
+
+        rejected = db.get_rejected_persons_for_face(fid)
+        assert "xu_tiancui" in rejected
+
+    def test_clear_unmatched_face_no_rejection(self, client, seeded_db):
+        """Clearing an unmatched face should not create a rejection pair."""
+        fid = seeded_db["face_ids"][0]
+        # face has no person_id
+        r = client.post(f"/api/face/{fid}/clear")
+        assert r.status_code == 200
+        assert r.json()["rejected_person"] is None
+
+        rejected = db.get_rejected_persons_for_face(fid)
+        assert rejected == []
+
+    def test_unreject_clears_rejections(self, client, seeded_db):
+        """Unrejecting a face should clear its rejection records."""
+        fid = seeded_db["face_ids"][0]
+        db.update_face_match(fid, "xu_tiancui", 0.45, "auto")
+
+        # Clear → creates rejection
+        client.post(f"/api/face/{fid}/clear")
+        assert len(db.get_rejected_persons_for_face(fid)) == 1
+
+        # Unreject → removes rejections
+        r = client.post(f"/api/face/{fid}/unreject")
+        assert r.status_code == 200
+        assert r.json()["rejections_cleared"] == 1
+        assert db.get_rejected_persons_for_face(fid) == []
+
+    def test_anchor_clears_rejection_for_pair(self, client, seeded_db):
+        """Anchoring a face should clear the rejection for that pair."""
+        fid = seeded_db["face_ids"][0]
+        # Manually insert a rejection
+        db.insert_rejected_match(fid, "xu_tiancui")
+
+        r = client.post("/api/anchor", json={"face_id": fid, "person_id": "xu_tiancui"})
+        assert r.status_code == 200
+
+        # Rejection for xu_tiancui should be cleared
+        rejected = db.get_rejected_persons_for_face(fid)
+        assert "xu_tiancui" not in rejected
+
+    def test_photo_detail_excludes_rejected_persons(self, client, seeded_db):
+        """Photo detail API should exclude rejected persons from match candidates."""
+        fid = seeded_db["face_ids"][0]
+        pid = seeded_db["photo_id"]
+
+        # Insert rejection
+        db.insert_rejected_match(fid, "xu_tiancui")
+
+        r = client.get(f"/api/photo/{pid}")
+        assert r.status_code == 200
+
+        face_data = next(f for f in r.json()["faces"] if f["face_id"] == fid)
+        assert "xu_tiancui" in face_data["rejected_persons"]
+
+        # Verify xu_tiancui is not in the match candidates
+        for m in face_data["matches"]:
+            assert m["person_id"] != "xu_tiancui"
+
+    def test_dashboard_shows_rejection_count(self, client, seeded_db):
+        """Dashboard should include rejection pair count."""
+        fid = seeded_db["face_ids"][0]
+        db.insert_rejected_match(fid, "xu_tiancui")
+
+        r = client.get("/api/dashboard")
+        assert r.status_code == 200
+        assert r.json()["rejection_pairs"] == 1
+
+
+class TestNegativeFeedbackIsolation:
+    """Rejections on face A must not leak to face B in the same photo."""
+
+    def test_clear_face_a_does_not_hide_person_from_face_b(self, client, seeded_db):
+        fid_a, fid_b, _ = seeded_db["face_ids"]
+        pid = seeded_db["photo_id"]
+
+        # Auto-match both faces to xu_tiancui
+        db.update_face_match(fid_a, "xu_tiancui", 0.45, "auto")
+        db.update_face_match(fid_b, "xu_tiancui", 0.50, "auto")
+
+        # Clear fid_a — rejects xu_tiancui for face A only
+        r = client.post(f"/api/face/{fid_a}/clear")
+        assert r.status_code == 200
+
+        # Face B should still show xu_tiancui as candidate
+        r = client.get(f"/api/photo/{pid}")
+        face_b_data = next(f for f in r.json()["faces"] if f["face_id"] == fid_b)
+        assert "xu_tiancui" not in face_b_data["rejected_persons"]
+
+    def test_unreject_face_a_does_not_clear_face_b_rejection(self, client, seeded_db):
+        fid_a, fid_b, _ = seeded_db["face_ids"]
+
+        # Reject different persons on different faces
+        db.insert_rejected_match(fid_a, "xu_tiancui")
+        db.update_face_match(fid_a, None, None, "rejected")
+        db.insert_rejected_match(fid_b, "xu_tiankui")
+        db.update_face_match(fid_b, None, None, "rejected")
+
+        # Unreject face A
+        r = client.post(f"/api/face/{fid_a}/unreject")
+        assert r.status_code == 200
+
+        # Face B's rejection must still be intact
+        assert "xu_tiankui" in db.get_rejected_persons_for_face(fid_b)
+
+
+class TestGlobalRematch:
+    def test_rematch_resets_existing_auto_matches(self, client, seeded_db):
+        """Global rematch must reset current auto matches before recomputing."""
+        fid1, fid2, fid3 = seeded_db["face_ids"]
+
+        # Anchor fid1 to create a reference
+        client.post("/api/anchor", json={"face_id": fid1, "person_id": "xu_tiancui"})
+
+        # Manually set fid2 as stale auto match to a different person
+        db.update_face_match(fid2, "xu_tiankui", 0.3, "auto")
+
+        # Global rematch should reset auto matches and recompute
+        r = client.post("/api/rematch")
+        assert r.status_code == 200
+
+        # fid2 should no longer have stale xu_tiankui assignment
+        face2 = db.get_conn().execute(
+            "SELECT person_id, match_method FROM faces WHERE face_id=?", (fid2,)
+        ).fetchone()
+        # It should either be NULL (no match) or matched to xu_tiancui (if similar enough)
+        assert face2["person_id"] != "xu_tiankui" or face2["match_method"] != "auto"
+
+
 class TestRejectPersistence:
     def test_clear_then_anchor_stays_rejected(self, client, seeded_db):
         """The main bug: clearing auto-match then creating anchor should NOT re-match."""

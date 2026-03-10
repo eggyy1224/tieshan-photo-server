@@ -98,6 +98,17 @@ CREATE TABLE IF NOT EXISTS image_embeddings (
 );
 CREATE INDEX IF NOT EXISTS idx_image_embed_photo ON image_embeddings(photo_id);
 CREATE INDEX IF NOT EXISTS idx_image_embed_model ON image_embeddings(model);
+
+CREATE TABLE IF NOT EXISTS rejected_matches (
+    reject_id   INTEGER PRIMARY KEY AUTOINCREMENT,
+    face_id     INTEGER NOT NULL,
+    photo_id    TEXT NOT NULL,
+    person_id   TEXT NOT NULL,
+    created     TEXT NOT NULL,
+    UNIQUE(face_id, person_id)
+);
+CREATE INDEX IF NOT EXISTS idx_rejected_face ON rejected_matches(face_id);
+CREATE INDEX IF NOT EXISTS idx_rejected_photo ON rejected_matches(photo_id);
 """
 
 _MIGRATIONS = [
@@ -291,6 +302,8 @@ def update_face_cluster(face_id: int, cluster_id: int) -> None:
 
 def delete_faces_for_photo(photo_id: str) -> None:
     conn = get_conn()
+    # Note: rejected_matches is keyed by photo_id (not face_id FK),
+    # so rejections survive face re-detection across rescans.
     conn.execute("DELETE FROM anchors WHERE face_id IN (SELECT face_id FROM faces WHERE photo_id=?)", (photo_id,))
     conn.execute("DELETE FROM faces WHERE photo_id=?", (photo_id,))
     conn.commit()
@@ -367,6 +380,12 @@ def insert_anchor(
             )
         return existing["anchor_id"]  # type: ignore[return-value]
 
+    # Clear any rejection for this face+person (anchor overrides rejection)
+    conn.execute(
+        "DELETE FROM rejected_matches WHERE face_id=? AND person_id=?",
+        (face_id, person_id),
+    )
+
     cur = conn.execute(
         """INSERT INTO anchors (face_id, person_id, source, confidence, created, note)
            VALUES (?, ?, ?, ?, ?, ?)""",
@@ -386,6 +405,93 @@ def get_anchor_for_face(face_id: int) -> Optional[dict[str, Any]]:
     conn = get_conn()
     row = conn.execute("SELECT * FROM anchors WHERE face_id=?", (face_id,)).fetchone()
     return dict(row) if row else None
+
+
+# ── Rejected Matches CRUD ────────────────────────────────────────
+
+def insert_rejected_match(face_id: int, person_id: str, photo_id: str | None = None) -> None:
+    """Record that face_id is NOT person_id (negative feedback).
+
+    Keyed by (face_id, person_id) for per-face precision.
+    photo_id is stored for bookkeeping but not used as query key.
+    No FK on face_id so rows survive delete_faces_for_photo (rescan).
+    """
+    conn = get_conn()
+    if photo_id is None:
+        row = conn.execute(
+            "SELECT photo_id FROM faces WHERE face_id=?", (face_id,)
+        ).fetchone()
+        photo_id = row["photo_id"] if row else ""
+    conn.execute(
+        """INSERT OR IGNORE INTO rejected_matches (face_id, photo_id, person_id, created)
+           VALUES (?, ?, ?, ?)""",
+        (face_id, photo_id, person_id, time.strftime("%Y-%m-%dT%H:%M:%S")),
+    )
+    conn.commit()
+
+
+def delete_rejected_matches_for_face(face_id: int, person_id: str | None = None) -> int:
+    """Delete rejection records for a specific face.
+
+    If person_id is given, only delete that specific pair.
+    Otherwise delete all rejections for the face.
+    Returns number of rows deleted.
+    """
+    conn = get_conn()
+    if person_id:
+        cur = conn.execute(
+            "DELETE FROM rejected_matches WHERE face_id=? AND person_id=?",
+            (face_id, person_id),
+        )
+    else:
+        cur = conn.execute(
+            "DELETE FROM rejected_matches WHERE face_id=?",
+            (face_id,),
+        )
+    conn.commit()
+    return cur.rowcount
+
+
+def delete_rejected_matches(photo_id: str, person_id: str | None = None) -> int:
+    """Delete rejection records for an entire photo.
+
+    If person_id is given, only delete that specific pair.
+    Otherwise delete all rejections for the photo.
+    Returns number of rows deleted.
+    """
+    conn = get_conn()
+    if person_id:
+        cur = conn.execute(
+            "DELETE FROM rejected_matches WHERE photo_id=? AND person_id=?",
+            (photo_id, person_id),
+        )
+    else:
+        cur = conn.execute(
+            "DELETE FROM rejected_matches WHERE photo_id=?",
+            (photo_id,),
+        )
+    conn.commit()
+    return cur.rowcount
+
+
+def get_rejected_persons_for_face(face_id: int) -> list[str]:
+    """Get all person_ids rejected for this specific face."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT person_id FROM rejected_matches WHERE face_id=?",
+        (face_id,),
+    ).fetchall()
+    return [r["person_id"] for r in rows]
+
+
+def get_rejected_persons_for_photo(photo_id: str) -> list[str]:
+    """Get all person_ids rejected across any face in a photo."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT DISTINCT person_id FROM rejected_matches WHERE photo_id=?",
+        (photo_id,),
+    ).fetchall()
+    return [r["person_id"] for r in rows]
 
 
 # ── Stats ────────────────────────────────────────────────────────────

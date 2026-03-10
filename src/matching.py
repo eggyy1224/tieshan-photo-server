@@ -30,8 +30,17 @@ def confidence_level(score: float) -> str:
     return "NONE"
 
 
-def match_face(embedding: np.ndarray, top_k: int = 3) -> list[dict]:
+def match_face(
+    embedding: np.ndarray,
+    top_k: int = 3,
+    exclude_persons: Optional[set[str]] = None,
+) -> list[dict]:
     """Match a face embedding against all anchored embeddings.
+
+    Args:
+        embedding: The face embedding to match.
+        top_k: Number of top matches to return.
+        exclude_persons: Person IDs to skip (from negative feedback).
 
     Returns top-k matches sorted by score descending.
     """
@@ -41,9 +50,11 @@ def match_face(embedding: np.ndarray, top_k: int = 3) -> list[dict]:
 
     scores: dict[str, list[float]] = {}
     for row in anchored:
+        pid = row["person_id"]
+        if exclude_persons and pid in exclude_persons:
+            continue
         anchor_emb = db.blob_to_embedding(row["embedding"])
         sim = cosine_similarity(embedding, anchor_emb)
-        pid = row["person_id"]
         if pid not in scores:
             scores[pid] = []
         scores[pid].append(sim)
@@ -95,7 +106,18 @@ def find_person_in_photos(
     results = []
     seen_photos: set[str] = set()
 
+    # Batch-load face_ids that rejected this person
+    rejected_face_ids = set(
+        r["face_id"] for r in db.get_conn().execute(
+            "SELECT face_id FROM rejected_matches WHERE person_id=?",
+            (person_id,),
+        ).fetchall()
+    )
+
     for face_row in all_faces:
+        if face_row["face_id"] in rejected_face_ids:
+            continue
+
         face_emb = db.blob_to_embedding(face_row["embedding"])
         best_sim = max(cosine_similarity(face_emb, ae) for ae in anchor_embeddings)
 

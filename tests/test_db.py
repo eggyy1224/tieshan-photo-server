@@ -59,6 +59,18 @@ class TestFaces:
         db.delete_faces_for_photo(pid)
         assert len(db.get_faces_for_photo(pid)) == 0
 
+    def test_delete_faces_with_rejected_matches(self):
+        """delete_faces_for_photo must not crash when rejected_matches exist (no FK)."""
+        pid = db.upsert_photo("test/c2.jpg", "test", "c2.jpg")
+        emb = np.random.randn(512).astype(np.float32)
+        fid = db.insert_face(pid, (0.1, 0.2, 0.3, 0.4), 0.9, emb)
+        db.upsert_person("xu_tiancui", "許天催")
+        db.insert_rejected_match(fid, "xu_tiancui")
+
+        # Should not raise IntegrityError (no FK from rejected_matches to faces)
+        db.delete_faces_for_photo(pid)
+        assert len(db.get_faces_for_photo(pid)) == 0
+
 
 class TestPersons:
     def test_upsert_and_find(self):
@@ -121,6 +133,112 @@ class TestAnchors:
 
         with pytest.raises(ValueError):
             db.insert_anchor(fid, "xu_tiankui", "manual", 1.0, "test")
+
+
+class TestRejectedMatches:
+    def test_insert_and_get(self):
+        pid = db.upsert_photo("test/rej.jpg", "test", "rej.jpg")
+        emb = np.random.randn(512).astype(np.float32)
+        fid = db.insert_face(pid, (0.1, 0.2, 0.3, 0.4), 0.9, emb)
+        db.upsert_person("xu_tiancui", "許天催")
+        db.upsert_person("xu_tiankui", "許天奎")
+
+        db.insert_rejected_match(fid, "xu_tiancui")
+        db.insert_rejected_match(fid, "xu_tiankui")
+
+        rejected = db.get_rejected_persons_for_face(fid)
+        assert set(rejected) == {"xu_tiancui", "xu_tiankui"}
+
+    def test_insert_duplicate_is_ignored(self):
+        pid = db.upsert_photo("test/rej2.jpg", "test", "rej2.jpg")
+        emb = np.random.randn(512).astype(np.float32)
+        fid = db.insert_face(pid, (0.1, 0.2, 0.3, 0.4), 0.9, emb)
+        db.upsert_person("xu_tiancui", "許天催")
+
+        db.insert_rejected_match(fid, "xu_tiancui")
+        db.insert_rejected_match(fid, "xu_tiancui")  # duplicate (same photo_id+person_id)
+
+        rejected = db.get_rejected_persons_for_face(fid)
+        assert rejected == ["xu_tiancui"]
+
+    def test_delete_specific_pair_by_face(self):
+        pid = db.upsert_photo("test/rej3.jpg", "test", "rej3.jpg")
+        emb = np.random.randn(512).astype(np.float32)
+        fid = db.insert_face(pid, (0.1, 0.2, 0.3, 0.4), 0.9, emb)
+        db.upsert_person("xu_tiancui", "許天催")
+        db.upsert_person("xu_tiankui", "許天奎")
+
+        db.insert_rejected_match(fid, "xu_tiancui")
+        db.insert_rejected_match(fid, "xu_tiankui")
+
+        deleted = db.delete_rejected_matches_for_face(fid, "xu_tiancui")
+        assert deleted == 1
+
+        remaining = db.get_rejected_persons_for_face(fid)
+        assert remaining == ["xu_tiankui"]
+
+    def test_delete_all_for_face(self):
+        pid = db.upsert_photo("test/rej4.jpg", "test", "rej4.jpg")
+        emb = np.random.randn(512).astype(np.float32)
+        fid = db.insert_face(pid, (0.1, 0.2, 0.3, 0.4), 0.9, emb)
+        db.upsert_person("xu_tiancui", "許天催")
+        db.upsert_person("xu_tiankui", "許天奎")
+
+        db.insert_rejected_match(fid, "xu_tiancui")
+        db.insert_rejected_match(fid, "xu_tiankui")
+
+        deleted = db.delete_rejected_matches_for_face(fid)
+        assert deleted == 2
+        assert db.get_rejected_persons_for_face(fid) == []
+
+    def test_rejection_does_not_cross_faces(self):
+        """Rejecting person on face A must not affect face B in same photo."""
+        pid = db.upsert_photo("test/rej5.jpg", "test", "rej5.jpg")
+        emb = np.random.randn(512).astype(np.float32)
+        fid_a = db.insert_face(pid, (0.1, 0.2, 0.1, 0.1), 0.9, emb)
+        fid_b = db.insert_face(pid, (0.5, 0.5, 0.1, 0.1), 0.9, emb)
+        db.upsert_person("xu_tiancui", "許天催")
+
+        db.insert_rejected_match(fid_a, "xu_tiancui")
+
+        assert "xu_tiancui" in db.get_rejected_persons_for_face(fid_a)
+        assert "xu_tiancui" not in db.get_rejected_persons_for_face(fid_b)
+
+    def test_unreject_does_not_cross_faces(self):
+        """Unrejecting face A must not clear rejections on face B."""
+        pid = db.upsert_photo("test/rej6.jpg", "test", "rej6.jpg")
+        emb = np.random.randn(512).astype(np.float32)
+        fid_a = db.insert_face(pid, (0.1, 0.2, 0.1, 0.1), 0.9, emb)
+        fid_b = db.insert_face(pid, (0.5, 0.5, 0.1, 0.1), 0.9, emb)
+        db.upsert_person("xu_tiancui", "許天催")
+        db.upsert_person("xu_tiankui", "許天奎")
+
+        db.insert_rejected_match(fid_a, "xu_tiancui")
+        db.insert_rejected_match(fid_b, "xu_tiankui")
+
+        db.delete_rejected_matches_for_face(fid_a)
+
+        assert db.get_rejected_persons_for_face(fid_a) == []
+        assert db.get_rejected_persons_for_face(fid_b) == ["xu_tiankui"]
+
+    def test_rejections_not_deleted_by_rescan(self):
+        """Orphaned rejection rows (no FK) must not crash delete_faces_for_photo."""
+        pid = db.upsert_photo("test/rej7.jpg", "test", "rej7.jpg")
+        emb = np.random.randn(512).astype(np.float32)
+        fid = db.insert_face(pid, (0.1, 0.2, 0.3, 0.4), 0.9, emb)
+        db.upsert_person("xu_tiancui", "許天催")
+        db.insert_rejected_match(fid, "xu_tiancui")
+
+        # Rescan: delete old faces — must not crash
+        db.delete_faces_for_photo(pid)
+        assert len(db.get_faces_for_photo(pid)) == 0
+
+        # Orphaned rows exist but don't affect new faces
+        assert db.get_rejected_persons_for_photo(pid) == ["xu_tiancui"]
+
+        # New face gets clean slate (different face_id)
+        fid2 = db.insert_face(pid, (0.1, 0.2, 0.3, 0.4), 0.95, emb)
+        assert db.get_rejected_persons_for_face(fid2) == []
 
 
 class TestStats:

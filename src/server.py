@@ -18,6 +18,7 @@ from .tools.photo_anchor import photo_anchor
 from .tools.photo_date import photo_date
 from .tools.photo_scene import photo_scene
 from .tools.photo_search import photo_search
+from .tools.photo_compare import photo_compare
 from .web.routes import register_routes
 
 mcp = FastMCP(
@@ -199,6 +200,24 @@ async def photo_search_tool(
         mode=mode, query=query, photo_id=photo_id, photo_path=photo_path,
         limit=limit, scene_filter=scene_filter, source_dir=source_dir,
     )
+
+
+# ── Phase 6 Tools ────────────────────────────────────────────────────
+
+@mcp.tool()
+async def photo_compare_tool(ref_photo: str, target_photo_id: str) -> dict:
+    """比對兩張照片中的人臉。用參考照片的臉去比對 DB 中目標照片的所有臉，回傳相似度排名。
+
+    典型用法：拿 TCMB 人物肖像去比對家族合照，找出同一人。
+
+    Args:
+        ref_photo: 參考照片路徑（絕對路徑，或相對於專案根目錄）。
+        target_photo_id: 目標照片的 photo_id（已掃描入 DB 的照片）。
+
+    Returns:
+        每張參考臉 vs 目標照片所有臉的 cosine similarity 排名。
+    """
+    return await photo_compare(ref_photo=ref_photo, target_photo_id=target_photo_id)
 
 
 # ── Startup ──────────────────────────────────────────────────────────

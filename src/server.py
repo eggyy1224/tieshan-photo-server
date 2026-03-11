@@ -19,6 +19,11 @@ from .tools.photo_date import photo_date
 from .tools.photo_scene import photo_scene
 from .tools.photo_search import photo_search
 from .tools.photo_compare import photo_compare
+from .tools.photo_detail import photo_detail
+from .tools.photo_persons import photo_persons
+from .tools.photo_unanchor import photo_unanchor
+from .tools.photo_reject import photo_reject
+from .tools.photo_add_person import photo_add_person
 from .web.routes import register_routes
 
 mcp = FastMCP(
@@ -218,6 +223,103 @@ async def photo_compare_tool(ref_photo: str, target_photo_id: str) -> dict:
         每張參考臉 vs 目標照片所有臉的 cosine similarity 排名。
     """
     return await photo_compare(ref_photo=ref_photo, target_photo_id=target_photo_id)
+
+
+@mcp.tool()
+async def photo_detail_tool(photo_id: str) -> dict:
+    """查詢單張照片的完整資訊：metadata、所有偵測到的臉、目前匹配結果、每張臉的 top-3 候選人。
+
+    Args:
+        photo_id: 照片的 photo_id（hex hash）。
+
+    Returns:
+        照片 metadata + 每張臉的匹配詳情。
+    """
+    return await photo_detail(photo_id=photo_id)
+
+
+@mcp.tool()
+async def photo_persons_tool(query: str = "") -> dict:
+    """列出人臉辨識資料庫中的所有人物，含 anchor 數和匹配照片數。
+
+    Args:
+        query: 可選篩選——比對 person_id 或 display_name（子字串匹配）。
+
+    Returns:
+        人物清單，按匹配數降序排列。
+    """
+    return await photo_persons(query=query)
+
+
+@mcp.tool()
+async def photo_unanchor_tool(face_id: int) -> dict:
+    """撤銷一張臉的 anchor 標記。用於修正錯誤的人物辨識。
+
+    移除後會自動對該照片重新跑匹配。
+
+    Args:
+        face_id: 要撤銷 anchor 的 face_id。
+
+    Returns:
+        確認訊息，含被移除的人物資訊。
+    """
+    return await photo_unanchor(face_id=face_id)
+
+
+@mcp.tool()
+async def photo_reject_tool(face_id: int) -> dict:
+    """拒絕一張臉的自動匹配結果。被拒絕的人物在未來匹配中會被排除。
+
+    不能用於 anchor 標記的臉——那個要用 photo_unanchor。
+
+    Args:
+        face_id: 要拒絕匹配的 face_id。
+
+    Returns:
+        確認訊息，含被拒絕的人物 ID。
+    """
+    return await photo_reject(face_id=face_id)
+
+
+@mcp.tool()
+async def photo_add_person_tool(
+    person_id: str,
+    display_name: str = "",
+    gender: str = "",
+    birth_year: int | None = None,
+    aliases: list[str] | None = None,
+    notes: str = "",
+    clear_gender: bool = False,
+    clear_birth_year: bool = False,
+    clear_aliases: bool = False,
+    clear_notes: bool = False,
+) -> dict:
+    """新增或更新人物到人臉辨識資料庫。會同步寫入 related_persons.yaml。
+
+    要清除既有人物的某個欄位，設對應的 clear_* 為 True（如 clear_gender=True 清除性別）。
+
+    Args:
+        person_id: snake_case 唯一 ID（如 'lin_qingjing'），需以字母開頭。
+        display_name: 顯示名稱（如 '林清經'）。新人物必填。
+        gender: 'M' 或 'F'，可不填。clear_gender=True 時忽略此值。
+        birth_year: 四位數出生年（如 1893），可不填。clear_birth_year=True 時忽略此值。
+        aliases: 別名列表（如 ['林氏清經', '清經']）。clear_aliases=True 時忽略此值。
+        notes: 備註文字。clear_notes=True 時忽略此值。
+        clear_gender: 設 True 清除既有性別。
+        clear_birth_year: 設 True 清除既有出生年。
+        clear_aliases: 設 True 清除既有別名。
+        clear_notes: 設 True 清除既有備註。
+
+    Returns:
+        確認訊息，含 person_id 和 display_name。
+    """
+    return await photo_add_person(
+        person_id=person_id, display_name=display_name,
+        gender=gender, birth_year=birth_year,
+        aliases=aliases, notes=notes,
+        clear_gender=clear_gender, clear_birth_year=clear_birth_year,
+        clear_aliases=clear_aliases, clear_notes=clear_notes,
+    )
 
 
 # ── Startup ──────────────────────────────────────────────────────────
